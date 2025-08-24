@@ -93,7 +93,11 @@ AUTODIFF_DEVICE_FUNC auto seed(const Wrt<Var&, Vars&...>& wrt, T&& seedval)
 {
     constexpr static auto N = Order<Var>;
     constexpr static auto size = 1 + sizeof...(Vars);
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     static_assert(size <= N, "It is not possible to compute higher-order derivatives with order greater than that of the autodiff number (e.g., using wrt(x, x, y, z) will fail if the autodiff numbers in use have order below 4).");
+#else
+    static_assert(size <= 2, "When AUTODIFF_DISABLE_HIGHER_ORDER is enabled, only first-order derivatives are supported. Use wrt(x) or wrt(x, y) at most.");
+#endif
     For<N>([&](auto i) constexpr {
         if constexpr (i.index < size)
             seed<i.index + 1>(std::get<i>(wrt.args), seedval);

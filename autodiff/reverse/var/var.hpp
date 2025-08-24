@@ -130,7 +130,11 @@ template<typename T>
 struct VariableOrder { constexpr static auto value = 0; };
 
 template<typename T>
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+struct VariableOrder<Variable<T>> { constexpr static auto value = 1; };
+#else
 struct VariableOrder<Variable<T>> { constexpr static auto value = 1 + VariableOrder<T>::value; };
+#endif
 
 template<typename T>
 struct isVariable { constexpr static bool value = false; };
@@ -165,16 +169,18 @@ struct Expr
     /// Bind a value pointer for writing the derivative during propagation
     virtual void bind_value(T* /* grad */) {}
 
-    /// Bind an expression pointer for writing the derivative expression during propagation
-    virtual void bind_expr(ExprPtr<T>* /* gradx */) {}
-
     /// Update the contribution of this expression in the derivative of the root node of the expression tree.
     /// @param wprime The derivative of the root expression node w.r.t. the child expression of this expression node.
     virtual void propagate(const T& wprime) = 0;
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
+    /// Bind an expression pointer for writing the derivative expression during propagation
+    virtual void bind_expr(ExprPtr<T>* /* gradx */) {}
+
     /// Update the contribution of this expression in the derivative of the root node of the expression tree.
     /// @param wprime The derivative of the root expression node w.r.t. the child expression of this expression node (as an expression).
     virtual void propagatex(const ExprPtr<T>& wprime) = 0;
+#endif
 
     /// Update the value of this expression
     virtual void update() = 0;
@@ -194,7 +200,11 @@ struct VariableExpr : Expr<T>
     VariableExpr(const T& v) : Expr<T>(v) {}
 
     virtual void bind_value(T* grad) { gradPtr = grad; }
+
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     virtual void bind_expr(ExprPtr<T>* gradx) { gradxPtr = gradx; }
+#endif
+
 };
 
 /// The node in the expression tree representing an independent variable.
@@ -211,10 +221,12 @@ struct IndependentVariableExpr : VariableExpr<T>
         if(gradPtr) { *gradPtr += wprime; }
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         if(gradxPtr) { *gradxPtr = *gradxPtr + wprime; }
     }
+#endif
 
     void update() override {}
 };
@@ -238,11 +250,13 @@ struct DependentVariableExpr : VariableExpr<T>
         expr->propagate(wprime);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         if(gradxPtr) { *gradxPtr = *gradxPtr + wprime; }
         expr->propagatex(wprime);
     }
+#endif
 
     void update() override
     {
@@ -259,8 +273,10 @@ struct ConstantExpr : Expr<T>
     void propagate([[maybe_unused]] const T& wprime) override
     {}
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex([[maybe_unused]] const ExprPtr<T>& wprime) override
     {}
+#endif
 
     void update() override {}
 };
@@ -288,10 +304,12 @@ struct NegativeExpr : UnaryExpr<T>
         x->propagate(-wprime);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(-wprime);
     }
+#endif
 
     void update() override
     {
@@ -331,11 +349,13 @@ struct AddExpr : BinaryExpr<T>
         r->propagate(wprime);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(wprime);
         r->propagatex(wprime);
     }
+#endif
 
     void update() override
     {
@@ -359,11 +379,13 @@ struct SubExpr : BinaryExpr<T>
         r->propagate(-wprime);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(wprime);  // (l - r)'l =  l'
         r->propagatex(-wprime); // (l - r)'r = -r'
     }
+#endif
 
     void update() override
     {
@@ -387,11 +409,13 @@ struct MulExpr : BinaryExpr<T>
         r->propagate(wprime * l->val); // (l * r)'r = l * w'
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(wprime * r);
         r->propagatex(wprime * l);
     }
+#endif
 
     void update() override
     {
@@ -417,6 +441,7 @@ struct DivExpr : BinaryExpr<T>
         r->propagate(wprime * aux2);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         const auto aux1 = 1.0 / r;
@@ -424,6 +449,7 @@ struct DivExpr : BinaryExpr<T>
         l->propagatex(wprime * aux1);
         r->propagatex(wprime * aux2);
     }
+#endif 
 
     void update() override
     {
@@ -446,10 +472,12 @@ struct SinExpr : UnaryExpr<T>
         x->propagate(wprime * cos(x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime * cos(x));
     }
+#endif
 
     void update() override
     {
@@ -471,10 +499,12 @@ struct CosExpr : UnaryExpr<T>
         x->propagate(-wprime * sin(x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(-wprime * sin(x));
     }
+#endif
 
     void update() override
     {
@@ -497,11 +527,13 @@ struct TanExpr : UnaryExpr<T>
         x->propagate(wprime * aux * aux);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         const auto aux = 1.0 / cos(x);
         x->propagatex(wprime * aux * aux);
     }
+#endif
 
     void update() override
     {
@@ -523,10 +555,12 @@ struct SinhExpr : UnaryExpr<T>
         x->propagate(wprime * cosh(x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime * cosh(x));
     }
+#endif
 
     void update() override
     {
@@ -548,10 +582,12 @@ struct CoshExpr : UnaryExpr<T>
         x->propagate(wprime * sinh(x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime * sinh(x));
     }
+#endif
 
     void update() override
     {
@@ -574,11 +610,13 @@ struct TanhExpr : UnaryExpr<T>
         x->propagate(wprime * aux * aux);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         const auto aux = 1.0 / cosh(x);
         x->propagatex(wprime * aux * aux);
     }
+#endif
 
     void update() override
     {
@@ -600,10 +638,12 @@ struct ArcSinExpr : UnaryExpr<T>
         x->propagate(wprime / sqrt(1.0 - x->val * x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime / sqrt(1.0 - x * x));
     }
+#endif
 
     void update() override
     {
@@ -625,10 +665,12 @@ struct ArcCosExpr : UnaryExpr<T>
         x->propagate(-wprime / sqrt(1.0 - x->val * x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(-wprime / sqrt(1.0 - x * x));
     }
+#endif
 
     void update() override
     {
@@ -650,10 +692,12 @@ struct ArcTanExpr : UnaryExpr<T>
         x->propagate(wprime / (1.0 + x->val * x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime / (1.0 + x * x));
     }
+#endif
 
     void update() override
     {
@@ -678,12 +722,14 @@ struct ArcTan2Expr : BinaryExpr<T>
         r->propagate(-l->val * aux);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         const auto aux = wprime / (l * l + r * r);
         l->propagatex(r * aux);
         r->propagatex(-l * aux);
     }
+#endif
 
     void update() override
     {
@@ -706,10 +752,12 @@ struct ExpExpr : UnaryExpr<T>
         x->propagate(wprime * val); // exp(x)' = exp(x) * x'
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime * exp(x));
     }
+#endif
 
     void update() override
     {
@@ -730,10 +778,12 @@ struct LogExpr : UnaryExpr<T>
         x->propagate(wprime / x->val); // log(x)' = x'/x
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime / x);
     }
+#endif
 
     void update() override
     {
@@ -757,10 +807,12 @@ struct Log10Expr : UnaryExpr<T>
         x->propagate(wprime / (ln10 * x->val));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime / (ln10 * x));
     }
+#endif
 
     void update() override
     {
@@ -793,6 +845,7 @@ struct PowExpr : BinaryExpr<T>
         r->propagate(aux * auxr);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         using U = VariableValueType<T>;
@@ -802,6 +855,7 @@ struct PowExpr : BinaryExpr<T>
         const auto auxr = l == zero ? 0.0*l : l * log(l); // since x*log(x) -> 0 as x -> 0
         r->propagatex(aux * auxr);
     }
+#endif 
 
     void update() override
     {
@@ -830,12 +884,14 @@ struct PowConstantLeftExpr : BinaryExpr<T>
         r->propagate(aux * auxr);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         const auto aux = wprime * pow(l, r - 1);
         const auto auxr = l == 0.0 ? 0.0*l : l * log(l); // since x*log(x) -> 0 as x -> 0
         r->propagatex(aux * auxr);
     }
+#endif
 
     void update() override
     {
@@ -859,10 +915,12 @@ struct PowConstantRightExpr : BinaryExpr<T>
         l->propagate(wprime * pow(l->val, r->val - 1) * r->val); // pow(l, r)'l = r * pow(l, r - 1) * l'
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(wprime * pow(l, r - 1) * r);
     }
+#endif
 
     void update() override
     {
@@ -884,10 +942,12 @@ struct SqrtExpr : UnaryExpr<T>
         x->propagate(wprime / (2.0 * sqrt(x->val))); // sqrt(x)' = 1/2 * 1/sqrt(x) * x'
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         x->propagatex(wprime / (2.0 * sqrt(x)));
     }
+#endif
 
     void update() override
     {
@@ -912,12 +972,14 @@ struct AbsExpr : UnaryExpr<T>
         else x->propagate(T(0));
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         if(x->val < 0.0) x->propagatex(-wprime);
         else if(x->val > 0.0) x->propagatex(wprime);
         else x->propagate(T(0));
     }
+#endif
 
     void update() override
     {
@@ -942,11 +1004,13 @@ struct ErfExpr : UnaryExpr<T>
         x->propagate(wprime * aux);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         const auto aux = 2.0 / sqrt_pi * exp(-x * x);
         x->propagatex(wprime * aux);
     }
+#endif
 
     void update() override
     {
@@ -971,11 +1035,13 @@ struct Hypot2Expr : BinaryExpr<T>
         r->propagate(wprime * r->val / val); // sqrt(l*l + r*r)'r = 1/2 * 1/sqrt(l*l + r*r) * (2*r*r') = (r*r')/sqrt(l*l + r*r)
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(wprime * l / hypot(l, r));
         r->propagatex(wprime * r / hypot(l, r));
     }
+#endif
 
     void update() override
     {
@@ -1003,12 +1069,14 @@ struct Hypot3Expr : TernaryExpr<T>
         r->propagate(wprime * r->val / val);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(wprime * l / hypot(l, c, r));
         c->propagatex(wprime * c / hypot(l, c, r));
         r->propagatex(wprime * r / hypot(l, c, r));
     }
+#endif
 
     void update() override
     {
@@ -1071,11 +1139,13 @@ struct ConditionalExpr : Expr<T>
         else r->propagate(wprime);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     void propagatex(const ExprPtr<T>& wprime) override
     {
         l->propagatex(derive(wprime, constant<T>(0.0)));
         r->propagatex(derive(constant<T>(0.0), wprime));
     }
+#endif
 
     void update() override
     {
@@ -1422,6 +1492,7 @@ auto derivatives(const T&)
     static_assert(!std::is_same_v<T,T>, "Method derivatives(const var&) has been deprecated. Use method derivatives(y, wrt(a, b, c,...) instead.");
 }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 /// Return the derivatives of a variable y with respect to all independent variables.
 template<typename T>
 [[deprecated("Use method derivativesx(y, wrt(a, b, c,...) instead.")]]
@@ -1429,6 +1500,7 @@ auto derivativesx(const T&)
 {
     static_assert(!std::is_same_v<T,T>, "Method derivativesx(const var&) has been deprecated. Use method derivativesx(y, wrt(a, b, c,...) instead.");
 }
+#endif
 
 template<typename... Vars>
 struct Wrt
@@ -1464,6 +1536,7 @@ auto derivatives(const Variable<T>& y, const Wrt<Vars...>& wrt)
     return values;
 }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 /// Return the derivatives of a dependent variable y with respect given independent variables.
 template<typename T, typename... Vars>
 auto derivativesx(const Variable<T>& y, const Wrt<Vars...>& wrt)
@@ -1483,6 +1556,7 @@ auto derivativesx(const Variable<T>& y, const Wrt<Vars...>& wrt)
 
     return values;
 }
+#endif
 
 /// Output a Variable object to the output stream.
 template<typename T>

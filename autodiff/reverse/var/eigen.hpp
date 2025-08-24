@@ -151,6 +151,10 @@ auto gradient(const Variable<T>& y, Eigen::DenseBase<X>& x)
 template<typename T, typename X, typename GradientVec>
 auto hessian(const Variable<T>& y, Eigen::DenseBase<X>& x, GradientVec& g)
 {
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    throw std::runtime_error("Hessian is not supported.");
+#endif
+
     using U = VariableValueType<T>;
 
     using ScalarX = typename X::Scalar;
@@ -168,6 +172,7 @@ auto hessian(const Variable<T>& y, Eigen::DenseBase<X>& x, GradientVec& g)
     using ExpressionGradient = Vec<ScalarX, Rows, MaxRows>;
     ExpressionGradient G(n);
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     for(auto k = 0; k < n; ++k)
         x[k].expr->bind_expr(&G(k).expr);
 
@@ -179,6 +184,7 @@ auto hessian(const Variable<T>& y, Eigen::DenseBase<X>& x, GradientVec& g)
     for(auto k = 0; k < n; ++k) {
       x[k].expr->bind_expr(nullptr);
     }
+#endif
 
     // Read the gradient value from gradient expressions' cached values
     g.resize(n);

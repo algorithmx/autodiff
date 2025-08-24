@@ -73,6 +73,19 @@ public:
     : m_data(data)
     {}
 
+    /// Construct a Real number from initializer list.
+    AUTODIFF_DEVICE_FUNC constexpr Real(std::initializer_list<T> values)
+    {
+        auto it = values.begin();
+        for (size_t i = 0; i < N + 1 && it != values.end(); ++i, ++it) {
+            m_data[i] = *it;
+        }
+        // Fill remaining elements with zero if initializer list is shorter
+        for (size_t i = values.size(); i < N + 1; ++i) {
+            m_data[i] = T{};
+        }
+    }
+
     /// Construct a Real number with given data.
     template<size_t M, typename U, Requires<isArithmetic<U>> = true>
     AUTODIFF_DEVICE_FUNC constexpr explicit Real(const Real<M, U>& other)
@@ -116,6 +129,20 @@ public:
     AUTODIFF_DEVICE_FUNC constexpr auto operator=(const std::array<T, N + 1>& data)
     {
         m_data = data;
+        return *this;
+    }
+
+    /// Assignment operator for initializer list.
+    AUTODIFF_DEVICE_FUNC constexpr auto operator=(std::initializer_list<T> values) -> Real&
+    {
+        auto it = values.begin();
+        for (size_t i = 0; i < N + 1 && it != values.end(); ++i, ++it) {
+            m_data[i] = *it;
+        }
+        // Fill remaining elements with zero if initializer list is shorter
+        for (size_t i = values.size(); i < N + 1; ++i) {
+            m_data[i] = T{};
+        }
         return *this;
     }
 
@@ -1004,7 +1031,16 @@ struct NumberTraits<Real<N, T>>
     using NumericType = T;
 
     /// The order of Real<N, T>.
+    // When higher-order derivatives are disabled via the compile-time
+    // option AUTODIFF_DISABLE_HIGHER_ORDER we clamp the reported order to
+    // at most 1 so the rest of the codebase (which queries Order<T>) will
+    // behave as if only first-order derivatives are available. The
+    // Real<N, T> storage remains unchanged so this is a non-invasive opt-out.
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    static constexpr auto Order = (N == 0 ? 0 : 1);
+#else
     static constexpr auto Order = N;
+#endif
 };
 
 } // namespace detail
@@ -1022,9 +1058,11 @@ using detail::repr;
 
 using real0th = Real<0, double>;
 using real1st = Real<1, double>;
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 using real2nd = Real<2, double>;
 using real3rd = Real<3, double>;
 using real4th = Real<4, double>;
+#endif
 
 using real = real1st;
 

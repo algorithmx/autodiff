@@ -636,10 +636,9 @@ AUTODIFF_DEVICE_FUNC constexpr auto eval(T&& expr)
     else return std::forward<T>(expr);
 }
 
-template<typename T>
+template<typename T, std::enable_if_t<isDual<T> || isExpr<T> || isArithmetic<T>, bool> = true>
 AUTODIFF_DEVICE_FUNC constexpr auto val(T&& expr)
 {
-    static_assert(isDual<T> || isExpr<T> || isArithmetic<T>);
     if constexpr (isDual<T>)
         return val(expr.val);
     else if constexpr (isExpr<T>)
@@ -661,6 +660,13 @@ AUTODIFF_DEVICE_FUNC auto derivative(const Dual<T, G>& dual)
     else if constexpr (order == 1)
         return val(dual.grad);
     else return derivative<order - 1>(dual.grad);
+}
+
+/// Extract the derivative of given order from an expression tree.
+template<size_t order = 1, typename T, Requires<isExpr<T>> = true>
+AUTODIFF_DEVICE_FUNC auto derivative(const T& expr)
+{
+    return derivative<order>(eval(expr));
 }
 
 //=====================================================================================================================
@@ -1772,7 +1778,14 @@ struct NumberTraits<Dual<T, G>>
     using NumericType = typename NumberTraits<ResultDualType>::NumericType;
 
     /// The order of Dual<T, G>.
+    // If higher-order derivatives are disabled, cap order at 1. This keeps
+    // Dual<T,G> usable for first-order autodiff while avoiding exposing
+    // second+ order functionality through the Order<T> trait.
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    static constexpr auto Order = 1;
+#else
     static constexpr auto Order = 1 + NumberTraits<ResultDualType>::Order;
+#endif
 };
 
 template<typename Op, typename R>
@@ -1785,7 +1798,11 @@ struct NumberTraits<UnaryExpr<Op, R>>
     using NumericType = typename NumberTraits<ResultDualType>::NumericType;
 
     /// The order of the expression UnaryExpr<Op, R> as the order of the evaluated dual type.
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    static constexpr auto Order = (NumberTraits<ResultDualType>::Order == 0 ? 0 : 1);
+#else
     static constexpr auto Order = NumberTraits<ResultDualType>::Order;
+#endif
 };
 
 template<typename Op, typename L, typename R>
@@ -1798,7 +1815,11 @@ struct NumberTraits<BinaryExpr<Op, L, R>>
     using NumericType = typename NumberTraits<ResultDualType>::NumericType;
 
     /// The order of the expression BinaryExpr<Op, L, R> as the order of the evaluated dual type.
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    static constexpr auto Order = (NumberTraits<ResultDualType>::Order == 0 ? 0 : 1);
+#else
     static constexpr auto Order = NumberTraits<ResultDualType>::Order;
+#endif
 };
 
 template<typename Op, typename L, typename C, typename R>
@@ -1811,7 +1832,11 @@ struct NumberTraits<TernaryExpr<Op, L, C, R>>
     using NumericType = typename NumberTraits<ResultDualType>::NumericType;
 
     /// The order of the expression TernaryExpr<Op, L, C, R> as the order of the evaluated dual type.
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    static constexpr auto Order = (NumberTraits<ResultDualType>::Order == 0 ? 0 : 1);
+#else
     static constexpr auto Order = NumberTraits<ResultDualType>::Order;
+#endif
 };
 
 //=====================================================================================================================
@@ -1848,9 +1873,11 @@ using detail::HigherOrderDual;
 
 using dual0th = HigherOrderDual<0, double>;
 using dual1st = HigherOrderDual<1, double>;
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 using dual2nd = HigherOrderDual<2, double>;
 using dual3rd = HigherOrderDual<3, double>;
 using dual4th = HigherOrderDual<4, double>;
+#endif
 
 using dual = dual1st;
 
