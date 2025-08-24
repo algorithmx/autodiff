@@ -24,6 +24,7 @@ option(AUTODIFF_BUILD_TESTS "Enable the compilation of the test files." ON)
 option(AUTODIFF_BUILD_PYTHON "Enable the compilation of the python bindings." ON)
 option(AUTODIFF_BUILD_EXAMPLES "Enable the compilation of the example files." ON)
 option(AUTODIFF_BUILD_DOCS "Enable the build of the documentation and website." ON)
+option(AUTODIFF_DISABLE_HIGHER_ORDER "Disable second and higher order derivatives at compile time (opt-out)." OFF)
 
 # Find eigen library
 find_package(Eigen3 QUIET)
@@ -54,6 +55,11 @@ endif()
 
 # Build the library (actually, just provide details about the library target, specify required compile options, etc. because autodiff is header-only)
 add_subdirectory(autodiff)
+
+if(AUTODIFF_DISABLE_HIGHER_ORDER)
+    add_definitions(-DAUTODIFF_DISABLE_HIGHER_ORDER)
+    message(STATUS "Autodiff configured to disable higher-order derivatives (AUTODIFF_DISABLE_HIGHER_ORDER).")
+endif()
 
 # Build the tests
 if(AUTODIFF_BUILD_TESTS)
