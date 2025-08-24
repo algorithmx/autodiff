@@ -102,7 +102,7 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
     }
 #endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
-#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+#if AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing array-unpacking of derivatives for eigen vector of dual numbers (first-order)")
     {
         dual x, y, z;

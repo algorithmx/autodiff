@@ -125,7 +125,7 @@ TEST_CASE("testing autodiff::real (with eigen)", "[forward][real][eigen]")
     }
 #endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
-#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+#if AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing array-unpacking of derivatives for eigen vector of real numbers (first-order)")
     {
         real1st x = {{ 2.0, 3.0 }};

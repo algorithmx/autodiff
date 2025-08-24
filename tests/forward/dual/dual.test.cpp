@@ -716,7 +716,7 @@ TEST_CASE("testing autodiff::dual", "[forward][dual]")
     }
 #endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
-#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+#if AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing array-unpacking of derivatives for dual number (first-order)")
     {
         dual x;

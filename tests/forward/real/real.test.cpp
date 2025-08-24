@@ -56,7 +56,7 @@ using namespace autodiff;
 }
 #endif
 
-#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+#if AUTODIFF_DISABLE_HIGHER_ORDER
 
 #define CHECK_1ST_ORDER_REAL_NUMBERS(a, b) \
     CHECK_APPROX( a[0], b[0] );            \

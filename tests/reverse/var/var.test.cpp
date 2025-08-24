@@ -35,6 +35,9 @@
 #include <autodiff/reverse/var.hpp>
 
 using autodiff::derivatives;
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
+using autodiff::derivativesx;
+#endif
 using autodiff::val;
 using autodiff::var;
 using autodiff::wrt;
@@ -49,7 +52,7 @@ inline auto grad(const var& y, var& x)
 #ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 inline auto gradx(const var& y, var& x)
 {
-    auto g = derivatives(y, wrt(x));
+    auto g = derivativesx(y, wrt(x));
     return g[0];
 }
 #endif // AUTODIFF_DISABLE_HIGHER_ORDER
