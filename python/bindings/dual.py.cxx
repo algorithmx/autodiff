@@ -183,6 +183,8 @@ void exportDual(py::module& m, const char* typestr)
 }
 
 void export_dual1st(py::module& m) { exportDual<dual0th, dual0th>(m, "dual1st"); }
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 void export_dual2nd(py::module& m) { exportDual<dual1st, dual1st>(m, "dual2nd"); }
 void export_dual3rd(py::module& m) { exportDual<dual2nd, dual2nd>(m, "dual3rd"); }
 void export_dual4th(py::module& m) { exportDual<dual3rd, dual3rd>(m, "dual4th"); }
+#endif

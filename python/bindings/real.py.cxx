@@ -230,6 +230,8 @@ void exportReal(py::module& m, const char* typestr)
 }
 
 void export_real1st(py::module& m) { exportReal<1, double>(m, "real1st"); }
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 void export_real2nd(py::module& m) { exportReal<2, double>(m, "real2nd"); }
 void export_real3rd(py::module& m) { exportReal<3, double>(m, "real3rd"); }
 void export_real4th(py::module& m) { exportReal<4, double>(m, "real4th"); }
+#endif
