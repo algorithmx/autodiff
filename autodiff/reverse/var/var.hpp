@@ -1607,6 +1607,9 @@ using HigherOrderVariable = typename AuxHigherOrderVariable<N, T>::type;
 
 using reverse::detail::wrt;
 using reverse::detail::derivatives;
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
+using reverse::detail::derivativesx;
+#endif
 using reverse::detail::Variable;
 using reverse::detail::val;
 
