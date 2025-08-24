@@ -68,3 +68,10 @@ CMakeLists.txt.user
 
 # macOS
 .DS_Store
+
+*.cmake
+*.marks
+build_test/
+build/
+backup_old_tests/
+tests/CMakeFiles/
