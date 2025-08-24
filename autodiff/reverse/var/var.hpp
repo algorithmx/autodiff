@@ -55,6 +55,7 @@ namespace detail {
 
 
 using std::abs;
+using std::fabs;
 using std::acos;
 using std::asin;
 using std::atan;
@@ -1247,6 +1248,7 @@ template<typename T, typename U, Requires<isArithmetic<U>> = true> ExprPtr<T> po
 // OTHER FUNCTIONS
 //------------------------------------------------------------------------------
 template<typename T> ExprPtr<T> abs(const ExprPtr<T>& x) { return std::make_shared<AbsExpr<T>>(abs(x->val), x); }
+template<typename T> ExprPtr<T> fabs(const ExprPtr<T>& x) { return std::make_shared<AbsExpr<T>>(abs(x->val), x); }
 template<typename T> ExprPtr<T> abs2(const ExprPtr<T>& x) { return x * x; }
 template<typename T> ExprPtr<T> conj(const ExprPtr<T>& x) { return x; }
 template<typename T> ExprPtr<T> real(const ExprPtr<T>& x) { return x; }
@@ -1475,6 +1477,7 @@ template<typename T, typename U, Requires<isArithmetic<U>> = true> ExprPtr<T> po
 // OTHER FUNCTIONS (DEFINED FOR ARGUMENTS OF TYPE Variable)
 //------------------------------------------------------------------------------
 template<typename T> ExprPtr<T> abs(const Variable<T>& x) { return abs(x.expr); }
+template<typename T> ExprPtr<T> fabs(const Variable<T>& x) { return abs(x.expr); }
 template<typename T> ExprPtr<T> abs2(const Variable<T>& x) { return abs2(x.expr); }
 template<typename T> ExprPtr<T> conj(const Variable<T>& x) { return conj(x.expr); }
 template<typename T> ExprPtr<T> real(const Variable<T>& x) { return real(x.expr); }

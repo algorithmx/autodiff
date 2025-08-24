@@ -52,6 +52,7 @@ namespace detail {
 //=====================================================================================================================
 
 using std::abs;
+using std::fabs;
 using std::acos;
 using std::asin;
 using std::atan;
@@ -915,6 +916,7 @@ template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr 
 //=====================================================================================================================
 
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto abs(R&& r) -> AbsExpr<R> { return { r }; }
+template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto fabs(R&& r) -> AbsExpr<R> { return { r }; }
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto abs2(R&& r) { return std::forward<R>(r) * std::forward<R>(r); }
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto conj(R&& r) { return std::forward<R>(r); }
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto real(R&& r) { return std::forward<R>(r); }

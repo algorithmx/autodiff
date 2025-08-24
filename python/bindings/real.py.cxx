@@ -184,6 +184,7 @@ void exportReal(py::module& m, const char* typestr)
     m.def("unseed", [](Real<N, T>& x) { x[1] = 1.0; });
 
     m.def("abs"  , [](const Real<N, T>& x) { return abs(x); });
+    m.def("fabs"  , [](const Real<N, T>& x) { return abs(x); });
 
     m.def("sin"  , [](const Real<N, T>& x) { return sin(x); });
     m.def("cos"  , [](const Real<N, T>& x) { return cos(x); });

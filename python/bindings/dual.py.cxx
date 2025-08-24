@@ -131,6 +131,7 @@ void exportDual(py::module& m, const char* typestr)
     if constexpr (!isSame<T, double>) py::implicitly_convertible<double, Dual<T, G>>();
 
     m.def("abs"  , [](const Dual<T, G>& x) { return abs(x); });
+    m.def("fabs"  , [](const Dual<T, G>& x) { return abs(x); });
 
     m.def("sin"  , [](const Dual<T, G>& x) { return sin(x); });
     m.def("cos"  , [](const Dual<T, G>& x) { return cos(x); });

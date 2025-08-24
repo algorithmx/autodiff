@@ -233,6 +233,7 @@ public:
 //=====================================================================================================================
 
 using std::abs;
+using std::fabs;
 using std::acos;
 using std::acosh;
 using std::asin;
@@ -883,6 +884,12 @@ AUTODIFF_DEVICE_FUNC constexpr auto abs(const Real<N, T>& x)
         });
     }
     return res;
+}
+
+// treat fabs as alias for backward compatibility
+template<size_t N, typename T>
+AUTODIFF_DEVICE_FUNC constexpr auto fabs(const Real<N, T>& x) {
+    return abs(x);
 }
 
 template<size_t N, typename T>
