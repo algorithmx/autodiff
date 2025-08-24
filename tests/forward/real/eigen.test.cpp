@@ -39,6 +39,7 @@ TEST_CASE("testing autodiff::real (with eigen)", "[forward][real][eigen]")
     using Eigen::MatrixXd;
     using Eigen::VectorXd;
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing array-unpacking of derivatives for eigen vector of real numbers")
     {
         real4th x = {{ 2.0, 3.0, 4.0, 5.0, 6.0 }};
@@ -122,6 +123,51 @@ TEST_CASE("testing autodiff::real (with eigen)", "[forward][real][eigen]")
         CHECK( u4th[1] == grad<4>(y) );
         CHECK( u4th[2] == grad<4>(z) );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
+
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    SECTION("testing array-unpacking of derivatives for eigen vector of real numbers (first-order)")
+    {
+        real1st x = {{ 2.0, 3.0 }};
+        real1st y = {{ 3.0, 4.0 }};
+        real1st z = {{ 4.0, 5.0 }};
+
+        VectorXreal1st u(3);
+        u << x, y, z;
+
+        auto [u0, u1] = derivatives(u);
+
+        CHECK( u0[0] == approx(derivative<0>(x)) );
+        CHECK( u0[1] == approx(derivative<0>(y)) );
+        CHECK( u0[2] == approx(derivative<0>(z)) );
+
+        CHECK( u1[0] == approx(derivative<1>(x)) );
+        CHECK( u1[1] == approx(derivative<1>(y)) );
+        CHECK( u1[2] == approx(derivative<1>(z)) );
+
+        auto u0th = derivative<0>(u);
+        auto u1th = derivative<1>(u);
+
+        CHECK( u0th.size() == 3);
+        CHECK( u1th.size() == 3);
+
+        CHECK( u0th[0] == derivative<0>(x) );
+        CHECK( u0th[1] == derivative<0>(y) );
+        CHECK( u0th[2] == derivative<0>(z) );
+
+        CHECK( u1th[0] == derivative<1>(x) );
+        CHECK( u1th[1] == derivative<1>(y) );
+        CHECK( u1th[2] == derivative<1>(z) );
+
+        CHECK( u0th[0] == grad<0>(x) );
+        CHECK( u0th[1] == grad<0>(y) );
+        CHECK( u0th[2] == grad<0>(z) );
+
+        CHECK( u1th[0] == grad<1>(x) );
+        CHECK( u1th[1] == grad<1>(y) );
+        CHECK( u1th[2] == grad<1>(z) );
+    }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     SECTION("testing casting to VectorXd")
     {

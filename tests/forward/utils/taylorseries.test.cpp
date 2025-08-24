@@ -106,22 +106,26 @@ TEST_CASE("testing forward taylorseries module", "[forward][utils][taylorseries]
     using Eigen::VectorXd;
 
     CHECK_TAYLOR_SERIES_SCALAR_FUN( real1st, (x.sin() * x.exp()).sum() );
+    CHECK_TAYLOR_SERIES_SCALAR_FUN( dual1st, (x.sin() * x.exp()).sum() );
+
+    CHECK_TAYLOR_SERIES_VECTOR_FUN( real1st, x.sin() * x.exp() );
+    CHECK_TAYLOR_SERIES_VECTOR_FUN( dual1st, x.sin() * x.exp() );
+
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     CHECK_TAYLOR_SERIES_SCALAR_FUN( real2nd, (x.sin() * x.exp()).sum() );
     CHECK_TAYLOR_SERIES_SCALAR_FUN( real3rd, (x.sin() * x.exp()).sum() );
     CHECK_TAYLOR_SERIES_SCALAR_FUN( real4th, (x.sin() * x.exp()).sum() );
 
-    CHECK_TAYLOR_SERIES_SCALAR_FUN( dual1st, (x.sin() * x.exp()).sum() );
     CHECK_TAYLOR_SERIES_SCALAR_FUN( dual2nd, (x.sin() * x.exp()).sum() );
     CHECK_TAYLOR_SERIES_SCALAR_FUN( dual3rd, (x.sin() * x.exp()).sum() );
     CHECK_TAYLOR_SERIES_SCALAR_FUN( dual4th, (x.sin() * x.exp()).sum() );
 
-    CHECK_TAYLOR_SERIES_VECTOR_FUN( real1st, x.sin() * x.exp() );
     CHECK_TAYLOR_SERIES_VECTOR_FUN( real2nd, x.sin() * x.exp() );
     CHECK_TAYLOR_SERIES_VECTOR_FUN( real3rd, x.sin() * x.exp() );
     CHECK_TAYLOR_SERIES_VECTOR_FUN( real4th, x.sin() * x.exp() );
 
-    CHECK_TAYLOR_SERIES_VECTOR_FUN( dual1st, x.sin() * x.exp() );
     CHECK_TAYLOR_SERIES_VECTOR_FUN( dual2nd, x.sin() * x.exp() );
     CHECK_TAYLOR_SERIES_VECTOR_FUN( dual3rd, x.sin() * x.exp() );
     CHECK_TAYLOR_SERIES_VECTOR_FUN( dual4th, x.sin() * x.exp() );
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 }

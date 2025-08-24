@@ -74,6 +74,7 @@ auto approx(T&& expr) -> Catch::Approx
     CHECK( dfdz[1] == approx(val(uz)) );                          \
 }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 #define CHECK_DERIVATIVES_FXY_3RD_ORDER(expr, u, ux, uy, uxx, uxy, uyy, uxxx, uxxy, uxyy, uyyy) \
 {                                                                                               \
     dual3rd x = 1;                                                                              \
@@ -150,6 +151,7 @@ auto approx(T&& expr) -> Catch::Approx
     CHECK( dfdyyy[2] == approx(val(uyy)) );                                                     \
     CHECK( dfdyyy[3] == approx(val(uyyy)) );                                                    \
 }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
 TEST_CASE("testing autodiff::dual", "[forward][dual]")
 {
@@ -587,6 +589,7 @@ TEST_CASE("testing autodiff::dual", "[forward][dual]")
         CHECK_DERIVATIVES_FXY(log(x + y) * exp(x / y) + sqrt(2.0 * x * y) - 1 / pow(x, x + y) - exp(x*x / (y*y) * y/x) * log(4*(x + y)*2/8) - 4 * sqrt((x + y) * (x + y) - x*x - y*y) * 0.5 * 0.5 + 2 / pow(2.0 * x - x, y + x) * 0.5, 0.0, 0.0, 0.0);
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing higher order derivatives")
     {
         Catch::StringMaker<double>::precision = 15;
@@ -643,7 +646,9 @@ TEST_CASE("testing autodiff::dual", "[forward][dual]")
             0.0  // uyyy
         );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing array-unpacking of derivatives for dual number")
     {
         dual4th x;
@@ -709,6 +714,44 @@ TEST_CASE("testing autodiff::dual", "[forward][dual]")
         CHECK( u4[1] == approx(derivative<4>(y)) );
         CHECK( u4[2] == approx(derivative<4>(z)) );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
+
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    SECTION("testing array-unpacking of derivatives for dual number (first-order)")
+    {
+        dual x;
+        detail::seed<0>(x, 2.0);
+        detail::seed<1>(x, 3.0);
+
+        auto [x0, x1] = derivatives(x);
+
+        CHECK( x0 == approx(val(x)) );
+        CHECK( x1 == approx(grad(x)) );
+    }
+
+    SECTION("testing array-unpacking of derivatives for vector of dual numbers (first-order)")
+    {
+        dual x, y, z;
+        detail::seed<0>(x, 2.0);
+        detail::seed<1>(x, 3.0);
+        detail::seed<0>(y, 3.0);
+        detail::seed<1>(y, 4.0);
+        detail::seed<0>(z, 4.0);
+        detail::seed<1>(z, 5.0);
+
+        std::vector<dual> u = { x, y, z };
+
+        auto [u0, u1] = derivatives(u);
+
+        CHECK( u0[0] == approx(val(x)) );
+        CHECK( u0[1] == approx(val(y)) );
+        CHECK( u0[2] == approx(val(z)) );
+
+        CHECK( u1[0] == approx(grad(x)) );
+        CHECK( u1[1] == approx(grad(y)) );
+        CHECK( u1[2] == approx(grad(z)) );
+    }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     SECTION("testing reference to unary and binary expression nodes are not present")
     {

@@ -32,6 +32,7 @@
 #include <tests/utils/catch.hpp>
 using namespace autodiff;
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 
 #define CHECK_4TH_ORDER_REAL_NUMBERS(a, b) \
     CHECK_APPROX( a[0], b[0] );            \
@@ -53,11 +54,31 @@ using namespace autodiff;
     CHECK_APPROX( dfdv[3], u[3] );                                                \
     CHECK_APPROX( dfdv[4], u[4] );                                                \
 }
+#endif
+
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+
+#define CHECK_1ST_ORDER_REAL_NUMBERS(a, b) \
+    CHECK_APPROX( a[0], b[0] );            \
+    CHECK_APPROX( a[1], b[1] );            \
+
+#define CHECK_DERIVATIVES_REAL1ST_WRT(expr)                                       \
+{                                                                                 \
+    real1st x = {{ 5, 0 }}, y = {{ 7, 0 }}, u;                                    \
+    auto f = [](const real1st& x, const real1st& y) -> real1st { return expr; };  \
+    /* Check directional derivatives of f(x,y) along direction (3, 5) */          \
+    auto dfdv = derivatives(f, along(3, 5), at(x, y));                            \
+    x[1] = 3.0; y[1] = 5.0; u = expr; x[1] = 0.0; y[1] = 0.0;                     \
+    CHECK_APPROX( dfdv[0], u[0] );                                                \
+    CHECK_APPROX( dfdv[1], u[1] );                                                \
+}
+#endif
 
 // Auxiliary constants
 const auto ln10 = 2.302585092994046;
 const auto pi = 3.14159265359;
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 TEST_CASE("testing autodiff::real", "[forward][real]")
 {
     real4th x, y, z, u, v, w;
@@ -499,3 +520,347 @@ TEST_CASE("testing autodiff::real", "[forward][real]")
         CHECK_APPROX( u0[2], z[0] ); CHECK_APPROX( u1[2], z[1] ); CHECK_APPROX( u2[2], z[2] ); CHECK_APPROX( u3[2], z[3] ); CHECK_APPROX( u4[2], z[4] );
     }
 }
+
+#else
+
+TEST_CASE("testing autodiff::real (first-order only)", "[forward][real]")
+{
+    real1st x, y, z, u, v, w;
+
+    x = 1.0;
+
+    CHECK_APPROX( x[0],  1.0 );
+    CHECK_APPROX( x[1],  0.0 );
+
+    x = {0.5, 3.0};
+
+    CHECK_APPROX( x[0],   0.5 );
+    CHECK_APPROX( x[1],   3.0 );
+
+    y = +x;
+
+    CHECK_APPROX( y[0],  x[0] );
+    CHECK_APPROX( y[1],  x[1] );
+
+    y = -x;
+
+    CHECK_APPROX( y[0],  -x[0] );
+    CHECK_APPROX( y[1],  -x[1] );
+
+    z = x + y;
+
+    CHECK_APPROX( z[0],  x[0] + y[0] );
+    CHECK_APPROX( z[1],  x[1] + y[1] );
+
+    z = x + 1.0;
+
+    CHECK_APPROX( z[0],  x[0] + 1.0 );
+    CHECK_APPROX( z[1],  x[1] );
+
+    z = 1.0 + x;
+
+    CHECK_APPROX( z[0],  x[0] + 1.0 );
+    CHECK_APPROX( z[1],  x[1] );
+
+    z = x - y;
+
+    CHECK_APPROX( z[0],  x[0] - y[0] );
+    CHECK_APPROX( z[1],  x[1] - y[1] );
+
+    z = x - 1.0;
+
+    CHECK_APPROX( z[0],  x[0] - 1.0 );
+    CHECK_APPROX( z[1],  x[1] );
+
+    z = 1.0 - x;
+
+    CHECK_APPROX( z[0],  1.0 - x[0] );
+    CHECK_APPROX( z[1],  -x[1] );
+
+    z = x * y;
+
+    CHECK_APPROX( z[0],  x[0]*y[0] );
+    CHECK_APPROX( z[1],  x[1]*y[0] + x[0]*y[1] );
+
+    z = x * 3.0;
+
+    CHECK_APPROX( z[0],  x[0]*3.0 );
+    CHECK_APPROX( z[1],  x[1]*3.0 );
+
+    z = 5.0 * x;
+
+    CHECK_APPROX( z[0],  5.0*x[0] );
+    CHECK_APPROX( z[1],  5.0*x[1] );
+
+    z = x / y;
+
+    CHECK_APPROX( z[0],  (x[0])/y[0] );
+    CHECK_APPROX( z[1],  (x[1] - y[1]*z[0])/y[0] );
+
+    z = 3.0 / y;
+
+    CHECK_APPROX( z[0],  3.0/y[0] );
+    CHECK_APPROX( z[1],  -(y[1]*z[0])/y[0] );
+
+    z = y / 5.0;
+
+    CHECK_APPROX( z[0],  y[0] / 5.0 );
+    CHECK_APPROX( z[1],  y[1] / 5.0 );
+
+    //=====================================================================================================================
+    //
+    // TESTING EXPONENTIAL AND LOGARITHMIC FUNCTIONS
+    //
+    //=====================================================================================================================
+
+    y = exp(x);
+
+    CHECK_APPROX( y[0], exp(x[0]) );
+    CHECK_APPROX( y[1], x[1] * y[0] );
+
+    y = log(x);
+
+    CHECK_APPROX( y[0], log(x[0]) );
+    CHECK_APPROX( y[1], (x[1]) / x[0] );
+
+    y = log10(x);
+    z = log(x)/ln10;
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    y = sqrt(x);
+    z = exp(0.5 * log(x));
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    y = cbrt(x);
+    z = exp(1.0/3.0 * log(x));
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    y = pow(x, x);
+    z = exp(x * log(x));
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    y = pow(x, pi);
+    z = exp(pi * log(x));
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    y = pow(pi, x);
+    z = exp(x * log(pi));
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    //=====================================================================================================================
+    //
+    // TESTING TRIGONOMETRIC FUNCTIONS
+    //
+    //=====================================================================================================================
+
+    y = sin(x);
+    z = cos(x);
+
+    CHECK_APPROX( y[0],  sin(x[0]) );
+    CHECK_APPROX( z[0],  cos(x[0]) );
+    CHECK_APPROX( y[1],   x[1] * z[0] );
+    CHECK_APPROX( z[1],  -x[1] * y[0] );
+
+    y = tan(x);
+    z = sin(x)/cos(x);
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    //=====================================================================================================================
+    //
+    // TESTING INVERSE TRIGONOMETRIC FUNCTIONS
+    //
+    //=====================================================================================================================
+
+    real1st xprime = {{ x[1] }};
+
+    y = asin(x);
+    z = xprime/sqrt(1 - x*x);
+
+    CHECK_APPROX( y[0], asin(x[0]) );
+    CHECK_APPROX( y[1], z[0] );
+
+    y = acos(x);
+    z = -xprime/sqrt(1 - x*x);
+
+    CHECK_APPROX( y[0], acos(x[0]) );
+    CHECK_APPROX( y[1], z[0] );
+
+    y = atan(x);
+    z = xprime/(1 + x*x);
+
+    CHECK_APPROX( y[0], atan(x[0]) );
+    CHECK_APPROX( y[1], z[0] );
+
+    // atan2(double, real1st)
+    constexpr double c = 2.0;
+    y = atan2(c, x);
+    z = xprime * (-c / (c * c + x * x));
+
+    CHECK_APPROX(y[0], atan2(c, x[0]));
+    CHECK_APPROX(y[1], z[0]);
+
+    // atan2(real1st, double)
+    y = atan2(x, c);
+    z = xprime * (c / (c * c + x * x));
+
+    CHECK_APPROX(y[0], atan2(x[0], c));
+    CHECK_APPROX(y[1], z[0]);
+
+    // atan2(real1st, real1st)
+    real1st yprime = {{ y[1] }};
+
+    const real1st s = atan2(y,x);
+    z = (x[0] * yprime - y[0] * xprime) / (x[0] * x[0] + y[0] * y[0]);
+
+    CHECK_APPROX(s[0], atan2(y[0], x[0]));
+    CHECK_APPROX(s[1], z[0]);
+
+    //=====================================================================================================================
+    //
+    // TESTING HYPERBOLIC FUNCTIONS
+    //
+    //=====================================================================================================================
+    y = sinh(x);
+    z = cosh(x);
+
+    CHECK_APPROX( y[0],  sinh(x[0]) );
+    CHECK_APPROX( z[0],  cosh(x[0]) );
+    CHECK_APPROX( y[1],  x[1] * z[0] );
+    CHECK_APPROX( z[1],  x[1] * y[0] );
+
+    y = tanh(x);
+    z = sinh(x)/cosh(x);
+
+    CHECK_1ST_ORDER_REAL_NUMBERS(y, z);
+
+    y = asinh(x);
+    z = 1/sqrt(x*x + 1);
+
+    CHECK_APPROX( y[0], asinh(x[0]) );
+    CHECK_APPROX( y[1], z[0] );
+
+    y = acosh(10*x); // acosh requires x > 1
+    z = 1/sqrt(100*x*x - 1);
+
+    CHECK_APPROX( y[0], acosh(10*x[0]) );
+    CHECK_APPROX( y[1], z[0] );
+
+    y = atanh(x);
+    z = 1/(1 - x*x);
+
+    CHECK_APPROX( y[0], atanh(x[0]) );
+    CHECK_APPROX( y[1], z[0] );
+
+    //=====================================================================================================================
+    //
+    // TESTING OTHER FUNCTIONS
+    //
+    //=====================================================================================================================
+
+    y = abs(x);
+
+    CHECK_APPROX( y[0], std::abs(x[0]) );
+    CHECK_APPROX( y[1], std::abs(x[0])/x[0] * x[1] );
+
+    y = -x;
+    z = abs(y);
+
+    CHECK_APPROX( z[0], std::abs(y[0]) );
+    CHECK_APPROX( z[1], std::abs(y[0])/(y[0]) * y[1] );
+
+    //=====================================================================================================================
+    //
+    // TESTING MIN/MAX FUNCTIONS
+    //
+    //=====================================================================================================================
+
+    x = {0.5, 3.0};
+    y = {4.5, 3.0};
+
+    z = min(x, y);    CHECK( z == x );
+    z = min(y, x);    CHECK( z == x );
+    z = min(x, 0.1);  CHECK( z == real1st(0.1) );
+    z = min(0.2, x);  CHECK( z == real1st(0.2) );
+    z = min(0.5, x);  CHECK( z == x );
+    z = min(x, 0.5);  CHECK( z == x );
+    z = min(3.5, x);  CHECK( z == x );
+    z = min(x, 3.5);  CHECK( z == x );
+    z = max(x, y);    CHECK( z == y );
+    z = max(y, x);    CHECK( z == y );
+    z = max(x, 0.1);  CHECK( z == x );
+    z = max(0.2, x);  CHECK( z == x );
+    z = max(0.5, x);  CHECK( z == x );
+    z = max(x, 0.5);  CHECK( z == x );
+    z = max(8.5, x);  CHECK( z == real1st(8.5) );
+    z = max(x, 8.5);  CHECK( z == real1st(8.5) );
+
+    //=====================================================================================================================
+    //
+    // TESTING COMPARISON OPERATORS
+    //
+    //=====================================================================================================================
+
+    x = {0.5, 3.0};
+
+    // Check equality not only on value but also on the derivatives
+    CHECK( x == real1st({0.5, 3.0}) );
+
+    // Check equality against plain numeric types (double) do not require check against derivatives
+    CHECK_FALSE( x == 0.6 );
+    CHECK( x == 0.5 );
+
+    // Check inequalities
+    CHECK_FALSE( x == real1st({0.5, 3.1}) );
+    CHECK( x != real1st({0.5, 3.1}) );
+    CHECK( x != 1.0 );
+    CHECK( x < 1.0 );
+    CHECK( x > 0.1 );
+    CHECK( x <= 1.0 );
+    CHECK( x >= 0.1 );
+    CHECK( x <= 0.5 );
+    CHECK( x >= 0.5 );
+
+    //=====================================================================================================================
+    //
+    // TESTING DERIVATIVE CALCULATIONS
+    //
+    //=====================================================================================================================
+
+    CHECK_DERIVATIVES_REAL1ST_WRT( exp(log(2*x + 3*y)) );
+    CHECK_DERIVATIVES_REAL1ST_WRT( sin(2*x + 3*y) );
+    CHECK_DERIVATIVES_REAL1ST_WRT( exp(2*x + 3*y) * log(x/y) );
+
+    // Testing array-unpacking of derivatives for real number (first-order)
+    {
+        real1st x = {{2.0, 3.0}};
+
+        auto [x0, x1] = derivatives(x);
+
+        CHECK_APPROX( x0, x[0] );
+        CHECK_APPROX( x1, x[1] );
+    }
+
+    // Testing array-unpacking of derivatives for vector of real numbers (first-order)
+    {
+        real1st x = {{2.0, 3.0}};
+        real1st y = {{3.0, 4.0}};
+        real1st z = {{4.0, 5.0}};
+
+        std::vector<real1st> u = { x, y, z };
+
+        auto [u0, u1] = derivatives(u);
+
+        CHECK_APPROX( u0[0], x[0] ); CHECK_APPROX( u1[0], x[1] );
+        CHECK_APPROX( u0[1], y[0] ); CHECK_APPROX( u1[1], y[1] );
+        CHECK_APPROX( u0[2], z[0] ); CHECK_APPROX( u1[2], z[1] );
+    }
+}
+
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER

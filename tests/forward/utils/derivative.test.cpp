@@ -43,6 +43,7 @@ using namespace autodiff;
 
 TEST_CASE("testing forward derivative module", "[forward][utils][derivative]")
 {
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing seed operations for higher-order cross derivatives...")
     {
         dual4th x, y;
@@ -100,4 +101,5 @@ TEST_CASE("testing forward derivative module", "[forward][utils][derivative]")
         CHECK( x[3][1] == 0.0 );
         CHECK( y[1] == 0.0 );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 }

@@ -46,11 +46,13 @@ inline auto grad(const var& y, var& x)
     return val(g[0]);
 }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 inline auto gradx(const var& y, var& x)
 {
-    auto g = derivativesx(y, wrt(x));
+    auto g = derivatives(y, wrt(x));
     return g[0];
 }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
 template<typename Var>
 auto approx(const Var& x) -> Catch::Approx
@@ -543,6 +545,7 @@ TEST_CASE("testing autodiff::var", "[reverse][var]")
     REQUIRE( val(erf(x)) == approx(std::erf(val(x))) );
     REQUIRE( grad(erf(x), x) == approx(2/sqrt(pi) * std::exp(-val(x)*val(x))) );
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     //--------------------------------------------------------------------------
     // TEST HIGHER ORDER DERIVATIVES (2nd order)
     //--------------------------------------------------------------------------
@@ -581,4 +584,5 @@ TEST_CASE("testing autodiff::var", "[reverse][var]")
     //--------------------------------------------------------------------------
     REQUIRE( val(gradx(gradx(gradx(log(x), x), x), x)) == approx(val(2.0/(x * x * x))) );
     REQUIRE( val(gradx(gradx(gradx(exp(x), x), x), x)) == approx(val(exp(x))) );
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 }

@@ -69,12 +69,14 @@ TEST_CASE("testing autodiff::var (with eigen)", "[reverse][var][eigen]")
     for(auto i = 0; i < x.size(); ++i)
         CHECK( g[i] == approx(1.0) );
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     H = hessian(y, x, g);
     for(auto i = 0; i < x.size(); ++i) {
         CHECK( val(g[i]) == approx(1.0) );
         for(auto j = 0; j < x.size(); ++j)
             CHECK( H(i, j) == approx(0.0) );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     //--------------------------------------------------------------------------
     // TESTING GRADIENT AND HESSIAN WHEN y = ||x||^2
@@ -87,12 +89,14 @@ TEST_CASE("testing autodiff::var (with eigen)", "[reverse][var][eigen]")
     for(auto i = 0; i < x.size(); ++i)
         CHECK( val(g[i]) == approx(2 * x[i]) );
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     H = hessian(y, x, g);
     for(auto i = 0; i < x.size(); ++i) {
         CHECK( val(g[i]) == approx(2 * x[i]) );
         for(auto j = 0; j < x.size(); ++j)
             CHECK( H(i, j) == approx(i == j ? 2.0 : 0.0) );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     //--------------------------------------------------------------------------
     // TESTING GRADIENT AND HESSIAN WHEN y = prod(sin(x))
@@ -104,6 +108,7 @@ TEST_CASE("testing autodiff::var (with eigen)", "[reverse][var][eigen]")
     for(auto i = 0; i < x.size(); ++i)
         CHECK( val(g[i]) == approx(y / tan(x[i])) );
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     H = hessian(y, x, g);
     for(auto i = 0; i < x.size(); ++i) {
         CHECK( val(g[i]) == approx(y / tan(x[i])) );
@@ -113,6 +118,7 @@ TEST_CASE("testing autodiff::var (with eigen)", "[reverse][var][eigen]")
             else
                 CHECK( H(i, j) == Catch::Approx(val(g[j] / tan(x[i]))) );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     //--------------------------------------------------------------------------
     // TESTING GRADIENT AND HESSIAN WHEN y = sum(diff(x).^2)
@@ -128,6 +134,7 @@ TEST_CASE("testing autodiff::var (with eigen)", "[reverse][var][eigen]")
     CHECK( val(g[3]) == approx(-2*x[2] + 4*x[3] - 2*x[4]) );
     CHECK( val(g[4]) == approx(-2*x[3] + 2*x[4]) );
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     H = hessian(y, x, g);
     CHECK( val(g[0]) == approx( 2*x[0] - 2*x[1]) );
     CHECK( val(g[1]) == approx(-2*x[0] + 4*x[1] - 2*x[2]) );
@@ -160,4 +167,5 @@ TEST_CASE("testing autodiff::var (with eigen)", "[reverse][var][eigen]")
     CHECK( H(4, 2) == approx( 0.0) );
     CHECK( H(4, 3) == approx(-2.0) );
     CHECK( H(4, 4) == approx( 2.0) );
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 }

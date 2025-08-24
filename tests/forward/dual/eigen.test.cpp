@@ -51,6 +51,7 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
     using Eigen::VectorXd;
     using Eigen::ArrayXd;
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing array-unpacking of derivatives for eigen vector of dual numbers")
     {
         dual4th x;
@@ -99,6 +100,33 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
         CHECK( u4[1] == approx(derivative<4>(y)) );
         CHECK( u4[2] == approx(derivative<4>(z)) );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
+
+#ifdef AUTODIFF_DISABLE_HIGHER_ORDER
+    SECTION("testing array-unpacking of derivatives for eigen vector of dual numbers (first-order)")
+    {
+        dual x, y, z;
+        detail::seed<0>(x, 2.0);
+        detail::seed<1>(x, 3.0);
+        detail::seed<0>(y, 3.0);
+        detail::seed<1>(y, 4.0);
+        detail::seed<0>(z, 4.0);
+        detail::seed<1>(z, 5.0);
+
+        VectorXdual u(3);
+        u << x, y, z;
+
+        auto [u0, u1] = derivatives(u);
+
+        CHECK( u0[0] == approx(val(x)) );
+        CHECK( u0[1] == approx(val(y)) );
+        CHECK( u0[2] == approx(val(z)) );
+
+        CHECK( u1[0] == approx(grad(x)) );
+        CHECK( u1[1] == approx(grad(y)) );
+        CHECK( u1[2] == approx(grad(z)) );
+    }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     SECTION("testing casting to VectorXd")
     {
@@ -147,7 +175,11 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
 
     SECTION("testing class template specializations for Eigen::ScalarBinaryOpTraits")
     {
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
         dual4th x = 4.0;
+#else
+        dual x = 4.0;
+#endif
 
         MatrixXd A(2, 2);
         A << 1.0, 3.0, 5.0, 7.0;
@@ -156,6 +188,7 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
         // Note that we mix not only dual4th times MatrixXd, but also expressions,
         // such as UnaryExp -x and +x, BinaryExpr (x+x) and (x+x)*(x+x).
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
         CHECK( (x*A).isApprox(x*A.cast<dual4th>()) );
         CHECK( ((+x)*A).isApprox(+x*A.cast<dual4th>()) );
         CHECK( ((-x)*A).isApprox(-x*A.cast<dual4th>()) );
@@ -167,6 +200,19 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
         CHECK( (A*(-x)).isApprox(-x*A.cast<dual4th>()) );
         CHECK( (A*(x+x)).isApprox(2*x*A.cast<dual4th>()) );
         CHECK( (A*((x+x)*(x+x))).isApprox(4*x*x*A.cast<dual4th>()) );
+#else
+        CHECK( (x*A).isApprox(x*A.cast<dual>()) );
+        CHECK( ((+x)*A).isApprox(+x*A.cast<dual>()) );
+        CHECK( ((-x)*A).isApprox(-x*A.cast<dual>()) );
+        CHECK( ((x+x)*A).isApprox(2*x*A.cast<dual>()) );
+        CHECK( (((x+x)*(x+x))*A).isApprox(4*x*x*A.cast<dual>()) );
+
+        CHECK( (A*x).isApprox(x*A.cast<dual>()) );
+        CHECK( (A*(+x)).isApprox(+x*A.cast<dual>()) );
+        CHECK( (A*(-x)).isApprox(-x*A.cast<dual>()) );
+        CHECK( (A*(x+x)).isApprox(2*x*A.cast<dual>()) );
+        CHECK( (A*((x+x)*(x+x))).isApprox(4*x*x*A.cast<dual>()) );
+#endif
     }
 
     SECTION("using Eigen::VectorXdual")
@@ -377,6 +423,7 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
         }
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("using VectorXdual2nd")
     {
         SECTION("testing casting to VectorXd")
@@ -515,6 +562,7 @@ TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
                     CHECK( H(i, j) == approx(((i == j) ? 1.0 : 0.0)) );
         }
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     SECTION("using Eigen::Map")
     {

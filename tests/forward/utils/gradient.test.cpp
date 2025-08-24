@@ -257,6 +257,7 @@ TEST_CASE("testing forward gradient module", "[forward][utils][gradient]")
         CHECK_GRADIENT( dual, (x.sin() * x.cos()).sum() );
     }
 
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
     SECTION("testing hessian computations")
     {
         CHECK_HESSIAN( dual2nd, x.sum() );
@@ -268,6 +269,7 @@ TEST_CASE("testing forward gradient module", "[forward][utils][gradient]")
         // CHECK_HESSIAN( dual2nd, (x * x.log()).sum() );
         // CHECK_HESSIAN( dual2nd, (x.sin() * x.cos()).sum() );
     }
+#endif // AUTODIFF_DISABLE_HIGHER_ORDER
 
     SECTION("testing jacobian computations")
     {
