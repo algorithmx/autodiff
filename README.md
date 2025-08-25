@@ -79,6 +79,37 @@ compute the partial derivative of *f*. The auxiliary function `autodiff::at`
 is used to indicate where (at which values of its parameters) the derivative
 of *f* is evaluated.
 
+#### Note on higher-order `wrt(...)` semantics
+
+When using higher-order dual types (e.g. `dual2nd`, `dual3rd`, `dual4th`, ...), a single-variable list `wrt(x)` automatically seeds **all** derivative orders for `x`. This occurs because the implementation fills any remaining higher-order derivative “slots” by repeatedly using the **last variable** in the `wrt(...)` list. In code (simplified): if the loop index exceeds the number of user-specified variables, the library reuses the last one.
+
+Practical consequences:
+
+- `wrt(x)` with `x: dual4th` yields value + `fx, fxx, fxxx, fxxxx` (no repetition needed).
+- `wrt(x, y)` with `x,y: dual3rd` seeds 1st order for `x`, 2nd for `y`, and the 3rd again for `y` (last variable) → enabling mixed / higher derivatives like `fxy` and `fxyy`.
+- `wrt(x, y, z)` (variables of order ≥ 5) is equivalent, for higher orders, to conceptually extending the list with `z, z, ...` until the maximum order is reached.
+- Repetition is only required to control *which* variables appear in the mixed derivative sequence (e.g. `wrt(x, x, y)` vs `wrt(x, y, y)`).
+
+Examples (assuming suitably high-order dual types):
+
+```c++
+dual4th x = 2.0;
+auto allx = derivatives(f, wrt(x), at(x));    // [f, fx, fxx, fxxx, fxxxx]
+
+dual3rd x2 = 1.0, y2 = 2.0;
+auto mix1 = derivatives(g, wrt(x2, y2), at(x2, y2));   // sequence uses x2, y2, y2
+auto mix2 = derivatives(g, wrt(x2, x2, y2), at(x2, y2)); // sequence x2, x2, y2
+```
+
+Guidelines:
+
+- Use a single `wrt(x)` for pure higher-order derivatives of one variable.
+- Use repetition only to shape mixed partial ordering (e.g. `wrt(x, y, x)` for `fxyx`).
+- The last variable always absorbs remaining orders—be explicit if that is *not* what you intend.
+- For readability, consider repeating a variable explicitly if relying on the implicit fill might surprise readers (`wrt(x)` vs `wrt(x, x, x, x)` when teaching).
+
+This behavior is intentional for convenience but can appear “hidden” if you expect repetition to be mandatory. The dedicated review in `docs/WRT_API_REVIEW.md` provides more design background.
+
 ### Reverse mode
 
 In a *reverse mode automatic differentiation* algorithm, the output variable of

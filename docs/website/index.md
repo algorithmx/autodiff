@@ -79,6 +79,33 @@ compute the partial derivative of *f*. The auxiliary function `autodiff::at`
 is used to indicate where (at which values of its parameters) the derivative
 of *f* is evaluated.
 
+#### Note on higher-order `wrt(...)` semantics
+
+With higher-order dual types (e.g. `dual2nd`, `dual3rd`, `dual4th`), a lone `wrt(x)` automatically seeds all available derivative orders for `x`. Internally, any remaining higher-order slots are filled by reusing the **last variable** listed in `wrt(...)`. Thus:
+
+- `wrt(x)` (x: `dual4th`) ⇒ compute value plus `fx, fxx, fxxx, fxxxx`.
+- `wrt(x, y)` (order ≥ 3) ⇒ seeds orders for `x`, then `y`, then again `y` for the 3rd (and beyond) order.
+- `wrt(x, y, z)` conceptually extends with `z, z, ...` to reach the maximum order supported by the dual type.
+
+Repetition is only needed to control **which** variable appears in each mixed derivative order (e.g. `wrt(x, x, y)` vs `wrt(x, y, y)`).
+
+Examples:
+```c++
+dual4th x = 2.0;
+auto seq1 = derivatives(f, wrt(x), at(x));            // [f, fx, fxx, fxxx, fxxxx]
+dual3rd x2 = 1.0, y2 = 2.0;
+auto seq2 = derivatives(g, wrt(x2, y2), at(x2, y2));  // sequence uses x2, y2, y2
+auto seq3 = derivatives(g, wrt(x2, x2, y2), at(x2, y2)); // x2, x2, y2
+```
+
+Guidelines:
+1. Use `wrt(x)` for straightforward higher-order derivatives of a single variable.
+2. Add repetitions only to express desired mixed partial orderings.
+3. Be explicit if you do **not** want the last variable to absorb higher orders—repeat the intended pattern.
+4. When teaching or emphasizing clarity, you may choose explicit repetition instead of relying on the implicit fill.
+
+For deeper design rationale see `docs/WRT_API_REVIEW.md`.
+
 ### Reverse mode
 
 In a *reverse mode automatic differentiation* algorithm, the output variable of
