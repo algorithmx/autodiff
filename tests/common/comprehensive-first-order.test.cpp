@@ -28,6 +28,7 @@
 // C++ includes
 #include <cstddef>
 #include <chrono>
+#include <cmath>
 
 // Catch includes
 #include <catch2/catch_test_macros.hpp>
@@ -232,7 +233,7 @@ TEST_CASE("comprehensive testing first-order derivatives", "[first-order-compreh
         
         // abs function: d/dx[abs(x)] = sign(x) (for x > 0)
         auto abs_result = abs(x);
-        CHECK( val(abs_result) == approx(abs(1.2)) );
+        CHECK( val(abs_result) == approx(std::fabs(1.2)) );
         CHECK( grad(abs_result) == approx(1.0) );
         
         // erf function
@@ -246,7 +247,7 @@ TEST_CASE("comprehensive testing first-order derivatives", "[first-order-compreh
         detail::seed<0>(x_neg, -1.2);
         detail::seed<1>(x_neg, 1.0);
         auto abs_neg_result = abs(x_neg);
-        CHECK( val(abs_neg_result) == approx(abs(-1.2)) );
+        CHECK( val(abs_neg_result) == approx(std::fabs(-1.2)) );
         CHECK( grad(abs_neg_result) == approx(-1.0) );
     }
 

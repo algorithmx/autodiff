@@ -27,6 +27,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include <cmath>
+
 // Catch includes
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -43,7 +45,7 @@ auto approx(T&& expr) -> Catch::Approx
     return Catch::Approx(val(std::forward<T>(expr))).margin(zero);
 }
 
-#define CHECK_APPROX(a, b) CHECK( abs(a - b) < abs(b) * std::numeric_limits<double>::epsilon() * 100 );
+#define CHECK_APPROX(a, b) CHECK( std::abs(val(a) - val(b)) < std::abs(val(b)) * std::numeric_limits<double>::epsilon() * 100 );
 
 TEST_CASE("testing autodiff::dual (with eigen)", "[forward][dual][eigen]")
 {
