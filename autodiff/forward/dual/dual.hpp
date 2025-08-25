@@ -96,6 +96,7 @@ struct TanOp     {};  // TANGENT OPERATOR
 struct SinhOp    {};  // HYPERBOLIC SINE OPERATOR
 struct CoshOp    {};  // HYPERBOLIC COSINE OPERATOR
 struct TanhOp    {};  // HYPERBOLIC TANGENT OPERATOR
+struct SigmoidOp {};  // LOGISTIC (SIGMOID) OPERATOR
 struct ArcSinOp  {};  // ARC SINE OPERATOR
 struct ArcCosOp  {};  // ARC COSINE OPERATOR
 struct ArcTanOp  {};  // ARC TANGENT OPERATOR
@@ -166,6 +167,9 @@ using CoshExpr = UnaryExpr<CoshOp, R>;
 
 template<typename R>
 using TanhExpr = UnaryExpr<TanhOp, R>;
+
+template<typename R>
+using SigmoidExpr = UnaryExpr<SigmoidOp, R>;
 
 template<typename R>
 using ArcSinExpr = UnaryExpr<ArcSinOp, R>;
@@ -889,6 +893,7 @@ AUTODIFF_DEVICE_FUNC constexpr auto hypot(L&& l, C&& c, R&& r) -> Hypot3Expr<L, 
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto sinh(R&& r) -> SinhExpr<R> { return { r }; }
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto cosh(R&& r) -> CoshExpr<R> { return { r }; }
 template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto tanh(R&& r) -> TanhExpr<R> { return { r }; }
+template<typename R, Requires<isExpr<R>> = true> AUTODIFF_DEVICE_FUNC constexpr auto sigmoid(R&& r) -> SigmoidExpr<R> { return { r }; }
 
 //=====================================================================================================================
 //
@@ -1659,6 +1664,24 @@ AUTODIFF_DEVICE_FUNC constexpr void apply(Dual<T, G>& self, TanhOp)
     const T aux = One<T>() / cosh(self.val);
     self.val = tanh(self.val);
     self.grad *= aux * aux;
+}
+
+template<typename T, typename G>
+AUTODIFF_DEVICE_FUNC constexpr void apply(Dual<T, G>& self, SigmoidOp)
+{
+    // Stable sigmoid: avoid overflow for large negative self.val
+    const T x = self.val;
+    T s;
+    if(x >= T(0)) {
+        const T e = exp(-x);
+        s = One<T>() / (One<T>() + e);
+    } else {
+        const T e = exp(x);
+        s = e / (One<T>() + e);
+    }
+    // derivative: s * (1 - s)
+    self.grad *= s * (One<T>() - s);
+    self.val = s;
 }
 
 template<typename T, typename G>

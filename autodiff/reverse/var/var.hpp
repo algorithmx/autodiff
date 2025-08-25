@@ -93,6 +93,7 @@ template<typename T> struct TanExpr;
 template<typename T> struct SinhExpr;
 template<typename T> struct CoshExpr;
 template<typename T> struct TanhExpr;
+template<typename T> struct SigmoidExpr; // logistic function
 template<typename T> struct ArcSinExpr;
 template<typename T> struct ArcCosExpr;
 template<typename T> struct ArcTanExpr;
@@ -623,6 +624,47 @@ struct TanhExpr : UnaryExpr<T>
     {
         x->update();
         this->val = tanh(x->val);
+    }
+};
+
+//------------------------------------------------------------------------------
+// LOGISTIC (SIGMOID) FUNCTION
+//------------------------------------------------------------------------------
+template<typename T>
+struct SigmoidExpr : UnaryExpr<T>
+{
+    using UnaryExpr<T>::x;
+    using UnaryExpr<T>::val;
+
+    SigmoidExpr(const T& v, const ExprPtr<T>& e) : UnaryExpr<T>(v, e) {}
+
+    void propagate(const T& wprime) override
+    {
+        // derivative: sigma'(x) = sigma(x) * (1 - sigma(x))
+        x->propagate(wprime * val * (1.0 - val));
+    }
+
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
+    void propagatex(const ExprPtr<T>& wprime) override
+    {
+        // Recompute sigma(x) expression-form for higher-order propagation.
+        // sigma(x) = 1 / (1 + exp(-x))
+        const auto sx = 1.0 / (1.0 + exp(-x));
+        x->propagatex(wprime * sx * (1.0 - sx));
+    }
+#endif
+
+    void update() override
+    {
+        x->update();
+        const auto xv = x->val;
+        if(xv >= 0) {
+            const auto e = exp(-xv);
+            this->val = 1.0 / (1.0 + e);
+        } else {
+            const auto e = exp(xv);
+            this->val = e / (1.0 + e);
+        }
     }
 };
 
@@ -1228,6 +1270,7 @@ template<typename T, typename U, typename V, Requires<isArithmetic<U> && isArith
 template<typename T> ExprPtr<T> sinh(const ExprPtr<T>& x) { return std::make_shared<SinhExpr<T>>(sinh(x->val), x); }
 template<typename T> ExprPtr<T> cosh(const ExprPtr<T>& x) { return std::make_shared<CoshExpr<T>>(cosh(x->val), x); }
 template<typename T> ExprPtr<T> tanh(const ExprPtr<T>& x) { return std::make_shared<TanhExpr<T>>(tanh(x->val), x); }
+template<typename T> ExprPtr<T> sigmoid(const ExprPtr<T>& x) { return std::make_shared<SigmoidExpr<T>>( (x->val >= 0 ? (1.0 / (1.0 + exp(-x->val))) : (exp(x->val) / (1.0 + exp(x->val))) ), x); }
 
 //------------------------------------------------------------------------------
 // EXPONENTIAL AND LOGARITHMIC FUNCTIONS
