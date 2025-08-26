@@ -1625,6 +1625,7 @@ std::ostream& operator<<(std::ostream& out, const ExprPtr<T>& x)
 // HIGHER-ORDER VAR NUMBERS
 //
 //=====================================================================================================================
+#ifndef AUTODIFF_DISABLE_HIGHER_ORDER
 
 template<size_t N, typename T>
 struct AuxHigherOrderVariable;
@@ -1643,6 +1644,8 @@ struct AuxHigherOrderVariable
 
 template<size_t N, typename T>
 using HigherOrderVariable = typename AuxHigherOrderVariable<N, T>::type;
+
+#endif
 
 } // namespace detail
 
