@@ -1315,6 +1315,15 @@ class UnifiedVariable
         return (*arena_)[expr_id_].value;
     }
 
+    // Fast access to stored value without forcing an update. Use this during
+    // expression construction to avoid triggering expensive forward updates.
+    // The stored value is the value that was set when the expression node
+    // was created; reading it avoids recursive update passes during build.
+    T raw_value() const
+    {
+        return (*arena_)[expr_id_].value;
+    }
+
     // Get expression ID
     ExprId<T> id() const { return expr_id_; }
 
@@ -1337,7 +1346,7 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Add, value() + other.value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Add, raw_value() + other.raw_value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1345,7 +1354,7 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Sub, value() - other.value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Sub, raw_value() - other.raw_value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1353,7 +1362,7 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Mul, value() * other.value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Mul, raw_value() * other.raw_value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1361,14 +1370,14 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Div, value() / other.value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Div, raw_value() / other.raw_value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable operator-() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Negate, -value(), expr_id_));
+            ExprData<T>::unary_op(OpType::Negate, -raw_value(), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1379,7 +1388,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Add, value() + static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Add, raw_value() + static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1389,7 +1398,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Sub, value() - static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Sub, raw_value() - static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1399,7 +1408,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Mul, value() * static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Mul, raw_value() * static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1409,7 +1418,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Div, value() / static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Div, raw_value() / static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1442,49 +1451,49 @@ class UnifiedVariable
     UnifiedVariable sin() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Sin, std::sin(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Sin, std::sin(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable cos() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Cos, std::cos(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Cos, std::cos(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable tan() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Tan, std::tan(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Tan, std::tan(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable exp() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Exp, std::exp(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Exp, std::exp(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable log() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Log, std::log(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Log, std::log(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable sqrt() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Sqrt, std::sqrt(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Sqrt, std::sqrt(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable abs() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Abs, std::abs(value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Abs, std::abs(raw_value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1492,7 +1501,7 @@ class UnifiedVariable
     {
         ensure_same_arena(exponent);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Pow, std::pow(value(), exponent.value()), expr_id_, exponent.expr_id_));
+            ExprData<T>::binary_op(OpType::Pow, std::pow(raw_value(), exponent.raw_value()), expr_id_, exponent.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1501,8 +1510,8 @@ class UnifiedVariable
     pow(const U& exponent) const
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(exponent)));
-        auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::PowConstantRight, std::pow(value(), static_cast<T>(exponent)), expr_id_, constant_id));
+    auto result_id = arena_->add_expression(
+        ExprData<T>::binary_op(OpType::PowConstantRight, std::pow(raw_value(), static_cast<T>(exponent)), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1565,7 +1574,7 @@ template<typename T>
 UnifiedVariable<T> erf(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Erf, std::erf(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::Erf, std::erf(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1575,7 +1584,7 @@ template<typename T>
 UnifiedVariable<T> sinh(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Sinh, std::sinh(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::Sinh, std::sinh(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1583,7 +1592,7 @@ template<typename T>
 UnifiedVariable<T> cosh(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Cosh, std::cosh(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::Cosh, std::cosh(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1591,7 +1600,7 @@ template<typename T>
 UnifiedVariable<T> tanh(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Tanh, std::tanh(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::Tanh, std::tanh(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1599,7 +1608,7 @@ template<typename T>
 UnifiedVariable<T> asin(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::ArcSin, std::asin(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::ArcSin, std::asin(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1607,7 +1616,7 @@ template<typename T>
 UnifiedVariable<T> acos(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::ArcCos, std::acos(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::ArcCos, std::acos(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1615,7 +1624,7 @@ template<typename T>
 UnifiedVariable<T> atan(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::ArcTan, std::atan(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::ArcTan, std::atan(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1623,7 +1632,7 @@ template<typename T>
 UnifiedVariable<T> log10(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Log10, std::log10(x.value()), x.id()));
+        ExprData<T>::unary_op(OpType::Log10, std::log10(x.raw_value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1631,11 +1640,11 @@ template<typename T>
 UnifiedVariable<T> sigmoid(const UnifiedVariable<T>& x)
 {
     T val;
-    if(x.value() >= 0) {
-        const auto e = std::exp(-x.value());
+    if(x.raw_value() >= 0) {
+        const auto e = std::exp(-x.raw_value());
         val = T{1} / (T{1} + e);
     } else {
-        const auto e = std::exp(x.value());
+        const auto e = std::exp(x.raw_value());
         val = e / (T{1} + e);
     }
     auto result_id = x.arena()->add_expression(
@@ -1650,7 +1659,7 @@ UnifiedVariable<T> atan2(const UnifiedVariable<T>& y, const UnifiedVariable<T>& 
         throw std::runtime_error("Variables must belong to the same expression arena");
     }
     auto result_id = y.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.value(), x.value()), y.id(), x.id()));
+        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.raw_value(), x.raw_value()), y.id(), x.id()));
     return UnifiedVariable<T>(y.arena(), result_id);
 }
 
@@ -1660,7 +1669,7 @@ atan2(const U& y, const UnifiedVariable<T>& x)
 {
     auto constant_id = x.arena()->add_expression(ExprData<T>::constant(static_cast<T>(y)));
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(static_cast<T>(y), x.value()), constant_id, x.id()));
+        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(static_cast<T>(y), x.raw_value()), constant_id, x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1670,7 +1679,7 @@ atan2(const UnifiedVariable<T>& y, const U& x)
 {
     auto constant_id = y.arena()->add_expression(ExprData<T>::constant(static_cast<T>(x)));
     auto result_id = y.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.value(), static_cast<T>(x)), y.id(), constant_id));
+        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.raw_value(), static_cast<T>(x)), y.id(), constant_id));
     return UnifiedVariable<T>(y.arena(), result_id);
 }
 
@@ -1681,7 +1690,7 @@ UnifiedVariable<T> hypot(const UnifiedVariable<T>& x, const UnifiedVariable<T>& 
         throw std::runtime_error("Variables must belong to the same expression arena");
     }
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.value(), y.value()), x.id(), y.id()));
+        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.raw_value(), y.raw_value()), x.id(), y.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1691,7 +1700,7 @@ hypot(const U& x, const UnifiedVariable<T>& y)
 {
     auto constant_id = y.arena()->add_expression(ExprData<T>::constant(static_cast<T>(x)));
     auto result_id = y.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(static_cast<T>(x), y.value()), constant_id, y.id()));
+        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(static_cast<T>(x), y.raw_value()), constant_id, y.id()));
     return UnifiedVariable<T>(y.arena(), result_id);
 }
 
@@ -1701,7 +1710,7 @@ hypot(const UnifiedVariable<T>& x, const U& y)
 {
     auto constant_id = x.arena()->add_expression(ExprData<T>::constant(static_cast<T>(y)));
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.value(), static_cast<T>(y)), x.id(), constant_id));
+        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.raw_value(), static_cast<T>(y)), x.id(), constant_id));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1712,7 +1721,7 @@ UnifiedVariable<T> hypot(const UnifiedVariable<T>& x, const UnifiedVariable<T>& 
         throw std::runtime_error("Variables must belong to the same expression arena");
     }
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::ternary_op(OpType::Hypot3, std::hypot(x.value(), y.value(), z.value()), x.id(), y.id(), z.id()));
+        ExprData<T>::ternary_op(OpType::Hypot3, std::hypot(x.raw_value(), y.raw_value(), z.raw_value()), x.id(), y.id(), z.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1768,7 +1777,7 @@ pow(const U& base, const UnifiedVariable<T>& exponent)
 {
     auto constant_id = exponent.arena()->add_expression(ExprData<T>::constant(static_cast<T>(base)));
     auto result_id = exponent.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::PowConstantLeft, std::pow(static_cast<T>(base), exponent.value()), constant_id, exponent.id()));
+        ExprData<T>::binary_op(OpType::PowConstantLeft, std::pow(static_cast<T>(base), exponent.raw_value()), constant_id, exponent.id()));
     return UnifiedVariable<T>(exponent.arena(), result_id);
 }
 
@@ -1786,7 +1795,7 @@ operator-(const U& scalar, const UnifiedVariable<T>& var)
 {
     auto constant_id = var.arena()->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
     auto result_id = var.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Sub, static_cast<T>(scalar) - var.value(), constant_id, var.id()));
+        ExprData<T>::binary_op(OpType::Sub, static_cast<T>(scalar) - var.raw_value(), constant_id, var.id()));
     return UnifiedVariable<T>(var.arena(), result_id);
 }
 
@@ -1803,7 +1812,7 @@ operator/(const U& scalar, const UnifiedVariable<T>& var)
 {
     auto constant_id = var.arena()->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
     auto result_id = var.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Div, static_cast<T>(scalar) / var.value(), constant_id, var.id()));
+        ExprData<T>::binary_op(OpType::Div, static_cast<T>(scalar) / var.raw_value(), constant_id, var.id()));
     return UnifiedVariable<T>(var.arena(), result_id);
 }
 
@@ -1859,7 +1868,7 @@ void apply_to_tuple(const Tuple& t, F&& f)
 template<typename T>
 std::ostream& operator<<(std::ostream& out, const UnifiedVariable<T>& var)
 {
-    out << var.value();
+    out << var.raw_value();
     return out;
 }
 
