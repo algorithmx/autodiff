@@ -160,232 +160,10 @@ template<typename T> using ExprId = size_t;
 template<typename T>
 constexpr ExprId<T> INVALID_EXPR_ID = std::numeric_limits<size_t>::max();
 
-/**
- * @brief Thread-local arena management for syntax sugar
- * 
- * This allows creating variables without explicitly passing arena parameters:
- * 
- * Usage:
- *   with_arena(arena) {
- *     auto x = make_var(2.0);  // Uses arena automatically
- *     auto y = make_var(3.0);
- *     auto z = x + y;          // All operations use same arena
- *   }
- * 
- * Or using RAII:
- *   {
- *     ArenaScope scope;        // Creates and manages arena
- *     auto x = make_var(2.0);
- *     auto y = make_var(3.0);
- *   }  // Arena destroyed here
- */
-template<typename T>
-class ArenaManager {
-private:
-    static thread_local std::shared_ptr<ExpressionArena<T>> current_arena_;
-    
-public:
-    static void set_current_arena(std::shared_ptr<ExpressionArena<T>> arena) {
-        current_arena_ = arena;
-    }
-    
-    static std::shared_ptr<ExpressionArena<T>> get_current_arena() {
-        if (!current_arena_) {
-            throw std::runtime_error("No active arena. Use ArenaScope or with_arena() to set one.");
-        }
-        return current_arena_;
-    }
-    
-    static bool has_current_arena() {
-        return static_cast<bool>(current_arena_);
-    }
-    
-    static void clear_current_arena() {
-        current_arena_.reset();
-    }
-};
 
-// Static member definition
-template<typename T>
-thread_local std::shared_ptr<ExpressionArena<T>> ArenaManager<T>::current_arena_;
-
-/**
- * @brief RAII Arena Scope Manager
- * 
- * Automatically creates and manages an arena for the current scope.
- * When the scope ends, the arena is automatically cleaned up.
- * 
- * Usage:
- *   {
- *     ArenaScope<double> scope;
- *     auto x = make_var(2.0);
- *     auto y = make_var(3.0);
- *     auto z = sin(x) + cos(y);
- *   }  // Arena automatically destroyed
- */
-template<typename T>
-class ArenaScope {
-private:
-    std::shared_ptr<ExpressionArena<T>> previous_arena_;
-    std::shared_ptr<ExpressionArena<T>> scope_arena_;
-    
-public:
-    explicit ArenaScope(size_t initial_capacity = 1000) {
-        // Save previous arena
-        previous_arena_ = ArenaManager<T>::has_current_arena() ? 
-                         ArenaManager<T>::get_current_arena() : nullptr;
-        
-        // Create new arena for this scope
-        scope_arena_ = std::make_shared<ExpressionArena<T>>();
-        scope_arena_->expressions_.reserve(initial_capacity);
-        
-        // Set as current
-        ArenaManager<T>::set_current_arena(scope_arena_);
-    }
-    
-    ~ArenaScope() {
-        // Restore previous arena
-        if (previous_arena_) {
-            ArenaManager<T>::set_current_arena(previous_arena_);
-        } else {
-            ArenaManager<T>::clear_current_arena();
-        }
-    }
-    
-    // Non-copyable, non-movable
-    ArenaScope(const ArenaScope&) = delete;
-    ArenaScope& operator=(const ArenaScope&) = delete;
-    ArenaScope(ArenaScope&&) = delete;
-    ArenaScope& operator=(ArenaScope&&) = delete;
-    
-    // Access to the arena if needed
-    std::shared_ptr<ExpressionArena<T>> arena() const { return scope_arena_; }
-};
-
-/**
- * @brief Scoped arena context manager
- * 
- * Temporarily sets an arena for a block of code.
- * 
- * Usage:
- *   auto arena = std::make_shared<ExpressionArena<double>>();
- *   with_arena(arena) {
- *     auto x = make_var(2.0);
- *     auto y = make_var(3.0);
- *   }
- */
-template<typename T>
-class ScopedArenaContext {
-private:
-    std::shared_ptr<ExpressionArena<T>> previous_arena_;
-    
-public:
-    explicit ScopedArenaContext(std::shared_ptr<ExpressionArena<T>> arena) {
-        previous_arena_ = ArenaManager<T>::has_current_arena() ? 
-                         ArenaManager<T>::get_current_arena() : nullptr;
-        ArenaManager<T>::set_current_arena(arena);
-    }
-    
-    ~ScopedArenaContext() {
-        if (previous_arena_) {
-            ArenaManager<T>::set_current_arena(previous_arena_);
-        } else {
-            ArenaManager<T>::clear_current_arena();
-        }
-    }
-    
-    // Non-copyable, non-movable
-    ScopedArenaContext(const ScopedArenaContext&) = delete;
-    ScopedArenaContext& operator=(const ScopedArenaContext&) = delete;
-    ScopedArenaContext(ScopedArenaContext&&) = delete;
-    ScopedArenaContext& operator=(ScopedArenaContext&&) = delete;
-};
-
-// Macro for with_arena syntax
-#define with_arena(arena_ptr) \
-    if (auto _arena_ctx = ScopedArenaContext<double>(arena_ptr); true)
-
-/**
- * @brief Variable Pool - High-level interface
- * 
- * Provides a clean, object-oriented interface for managing variables
- * and expressions within a single arena context.
- * 
- * Usage:
- *   VariablePool<double> pool;
- *   auto x = pool.variable(2.0);
- *   auto y = pool.variable(3.0);
- *   auto z = pool.compute([&]() { return sin(x) + cos(y); });
- */
-template<typename T>
-class VariablePool {
-private:
-    std::shared_ptr<ExpressionArena<T>> arena_;
-    
-public:
-    explicit VariablePool(size_t initial_capacity = 1000) 
-        : arena_(std::make_shared<ExpressionArena<T>>()) {
-        arena_->expressions_.reserve(initial_capacity);
-    }
-    
-    // Create a new variable
-    UnifiedVariable<T> variable(const T& value) {
-        return UnifiedVariable<T>(arena_, value);
-    }
-    
-    // Create a constant
-    UnifiedVariable<T> constant(const T& value) {
-        auto id = arena_->add_expression(ExprData<T>::constant(value));
-        return UnifiedVariable<T>(arena_, id);
-    }
-    
-    // Compute an expression within this pool's context
-    template<typename F>
-    auto compute(F&& func) -> decltype(func()) {
-        // Set this pool's arena as current
-        auto prev_arena = ArenaManager<T>::has_current_arena() ? 
-                         ArenaManager<T>::get_current_arena() : nullptr;
-        ArenaManager<T>::set_current_arena(arena_);
-        
-        try {
-            auto result = func();
-            
-            // Restore previous arena
-            if (prev_arena) {
-                ArenaManager<T>::set_current_arena(prev_arena);
-            } else {
-                ArenaManager<T>::clear_current_arena();
-            }
-            
-            return result;
-        } catch (...) {
-            // Restore arena even on exception
-            if (prev_arena) {
-                ArenaManager<T>::set_current_arena(prev_arena);
-            } else {
-                ArenaManager<T>::clear_current_arena();
-            }
-            throw;
-        }
-    }
-    
-    // Access to derivatives
-    template<typename... Vars>
-    std::array<T, sizeof...(Vars)> derivatives(const UnifiedVariable<T>& y, const Wrt<Vars...>& wrt_vars) {
-        return ::autodiff::reverse::unified::derivatives(y, wrt_vars);
-    }
-    
-    // Access to underlying arena if needed
-    std::shared_ptr<ExpressionArena<T>> arena() const { return arena_; }
-    
-    // Arena statistics
-    size_t expression_count() const { return arena_->size(); }
-    
-    // Clear all expressions (keeps arena alive)
-    void clear() {
-        arena_ = std::make_shared<ExpressionArena<T>>();
-    }
-};
+///////////////////////////
+// core expression system
+///////////////////////////
 
 /**
  * @brief Expression type enumeration for efficient dispatch
@@ -442,7 +220,7 @@ enum class OpType : uint8_t {
  * 
  * ORIGINAL CORRESPONDENCE:
  * =======================
- * - type == Constant           → ConstantExpr<T>
+ * - type == Constant            → ConstantExpr<T>
  * - type == IndependentVariable → IndependentVariableExpr<T>
  * - type == DependentVariable   → DependentVariableExpr<T>
  * - type == Unary + op_type     → SinExpr<T>, CosExpr<T>, etc.
@@ -451,124 +229,127 @@ enum class OpType : uint8_t {
  * 
  * MEMORY LAYOUT:
  * =============
- * The struct is designed for efficient packing:
- * - 2 bytes for type and op_type enums
- * - sizeof(T) bytes for value (typically 8 bytes for double)
- * - 24 bytes for children array (3 * 8 bytes on 64-bit)
- * - 1 byte for num_children
- * - 16 bytes for pointer members (2 * 8 bytes on 64-bit)
- * - 2 bytes for flags
- * Total: ~51-53 bytes per expression (vs ~56-72 bytes in original)
+ * The struct is designed for optimal memory alignment and packing:
+ * - sizeof(T) bytes for value (typically 8 bytes for double) - 8-byte aligned
+ * - 24 bytes for children array (3 * 8 bytes on 64-bit) - 8-byte aligned  
+ * - 2 bytes for type and op_type enums (uint8_t)
+ * - 1 byte for num_children (uint8_t)
+ * - 2 bytes for boolean flags
+ * - Minimal padding due to optimal member ordering
+ * Total: ~40 bytes per expression (vs ~56-72 bytes in original, ~51-53 bytes unoptimized)
  */
 template<typename T>
 struct ExprData {
-    ExprType type;
-    OpType op_type;
+    // Largest members first for optimal alignment (8-byte aligned)
     T value;
     
-    // Child expression references (indices into flat container)
+    // Child expression references (indices into flat container) - 8-byte aligned
     std::array<ExprId<T>, 3> children;
+    
+    // Pack smaller members together to minimize padding
+    ExprType type;
+    OpType op_type;
     uint8_t num_children;
     
-    // First-order gradient accumulation pointer only
-    T* grad_ptr;
-    
-    // Flags
+    // Flags - pack bools together
     bool is_constant;
     bool needs_update;
+    bool processed_in_backprop;
     
     // Default constructor
     ExprData() 
-        : type(ExprType::Constant)
-        , op_type(OpType::None)
-        , value(T{0})
+        : value(T{0})
         , children{INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>}
+        , type(ExprType::Constant)
+        , op_type(OpType::None)
         , num_children(0)
-        , grad_ptr(nullptr)
         , is_constant(true)
         , needs_update(false)
+        , processed_in_backprop(false)
     {}
     
     // Constructor for constants
     static ExprData constant(const T& val) {
         ExprData data;
+        data.value = val;
+        data.children = {INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
         data.type = ExprType::Constant;
         data.op_type = OpType::None;
-        data.value = val;
+        data.num_children = 0;
         data.is_constant = true;
         data.needs_update = false;
+        data.processed_in_backprop = false;
         return data;
     }
     
     // Constructor for independent variables
     static ExprData independent_variable(const T& val) {
         ExprData data;
+        data.value = val;
+        data.children = {INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
         data.type = ExprType::IndependentVariable;
         data.op_type = OpType::None;
-        data.value = val;
+        data.num_children = 0;
         data.is_constant = false;
         data.needs_update = false;
+        data.processed_in_backprop = false;
         return data;
     }
     
     // Constructor for dependent variables
     static ExprData dependent_variable(const T& val, ExprId<T> child) {
         ExprData data;
+        data.value = val;
+        data.children = {child, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
         data.type = ExprType::DependentVariable;
         data.op_type = OpType::None;
-        data.value = val;
-        data.children[0] = child;
         data.num_children = 1;
         data.is_constant = false;
         data.needs_update = true;
+        data.processed_in_backprop = false;
         return data;
     }
     
     // Constructor for unary operations
     static ExprData unary_op(OpType op, const T& val, ExprId<T> child) {
         ExprData data;
+        data.value = val;
+        data.children = {child, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
         data.type = ExprType::Unary;
         data.op_type = op;
-        data.value = val;
-        data.children[0] = child;
         data.num_children = 1;
         data.is_constant = false;
         data.needs_update = true;
+        data.processed_in_backprop = false;
         return data;
     }
     
     // Constructor for binary operations
     static ExprData binary_op(OpType op, const T& val, ExprId<T> left, ExprId<T> right) {
         ExprData data;
+        data.value = val;
+        data.children = {left, right, INVALID_EXPR_ID<T>};
         data.type = ExprType::Binary;
         data.op_type = op;
-        data.value = val;
-        data.children[0] = left;
-        data.children[1] = right;
         data.num_children = 2;
         data.is_constant = false;
         data.needs_update = true;
+        data.processed_in_backprop = false;
         return data;
     }
     
     // Constructor for ternary operations
     static ExprData ternary_op(OpType op, const T& val, ExprId<T> left, ExprId<T> center, ExprId<T> right) {
         ExprData data;
+        data.value = val;
+        data.children = {left, center, right};
         data.type = ExprType::Ternary;
         data.op_type = op;
-        data.value = val;
-        data.children[0] = left;
-        data.children[1] = center;
-        data.children[2] = right;
         data.num_children = 3;
         data.is_constant = false;
         data.needs_update = true;
+        data.processed_in_backprop = false;
         return data;
-    }
-    
-    // Bind gradient pointer (for first-order derivatives only)
-    void bind_gradient(T* ptr) {
-        grad_ptr = ptr;
     }
 };
 
@@ -677,8 +458,11 @@ public:
     
     // Propagate derivatives (backward pass)
     void propagate(ExprId<T> root_id, const T& wprime = T{1}) {
-        // Clear gradient workspace
+        // Clear gradient workspace and reset processed flags
         std::fill(gradient_workspace_.begin(), gradient_workspace_.end(), T{0});
+        for (auto& expr : expressions_) {
+            expr.processed_in_backprop = false;
+        }
         
         // Start propagation from root
         gradient_workspace_[root_id] = wprime;
@@ -686,9 +470,12 @@ public:
         // Propagate in reverse topological order
         for (size_t i = expressions_.size(); i > 0; --i) {
             ExprId<T> expr_id = i - 1;
+            auto& expr = expressions_[expr_id];
             T current_grad = gradient_workspace_[expr_id];
             
-            if (current_grad != T{0}) {
+            // Process each expression exactly once if it has accumulated gradient
+            if (current_grad != T{0} && !expr.processed_in_backprop) {
+                expr.processed_in_backprop = true;
                 propagate_expression(expr_id, current_grad);
             }
         }
@@ -697,12 +484,19 @@ public:
     // Clear all gradients
     void clear_gradients() {
         std::fill(gradient_workspace_.begin(), gradient_workspace_.end(), T{0});
-        
         for (auto& expr : expressions_) {
-            if (expr.grad_ptr) {
-                *expr.grad_ptr = T{0};
-            }
+            expr.processed_in_backprop = false;
         }
+    }
+    
+    // Get gradient for a specific expression
+    T gradient(ExprId<T> expr_id) const {
+        return gradient_workspace_[expr_id];
+    }
+    
+    // Get reference to entire gradient workspace (for advanced usage)
+    const std::vector<T>& gradients() const {
+        return gradient_workspace_;
     }
     
 private:
@@ -846,11 +640,8 @@ private:
     void propagate_expression(ExprId<T> expr_id, const T& wprime) {
         auto& expr = expressions_[expr_id];
         
-        // Accumulate gradient for variables
-        if ((expr.type == ExprType::IndependentVariable || expr.type == ExprType::DependentVariable) 
-            && expr.grad_ptr) {
-            *expr.grad_ptr += wprime;
-        }
+        // Gradients are automatically accumulated in gradient_workspace_[expr_id]
+        // No need for special gradient pointer handling
         
         // Propagate to children based on operation type
         switch (expr.type) {
@@ -1149,11 +940,6 @@ public:
         } else {
             throw std::runtime_error("Cannot update value of dependent variable");
         }
-    }
-    
-    // Bind gradient pointer
-    void bind_gradient(T* grad_ptr) {
-        (*arena_)[expr_id_].bind_gradient(grad_ptr);
     }
     
     // Arithmetic operators
@@ -1651,32 +1437,18 @@ template<typename T, typename... Vars>
 std::array<T, sizeof...(Vars)> derivatives(const UnifiedVariable<T>& y, const Wrt<Vars...>& wrt_vars) {
     constexpr auto N = sizeof...(Vars);
     std::array<T, N> gradients;
-    gradients.fill(T{0});
-    
-    // Helper to bind gradient at specific index
-    auto bind_at_index = [&gradients](const auto& var, size_t index) {
-        var.bind_gradient(&gradients[index]);
-    };
-    
-    auto unbind_at_index = [](const auto& var, size_t) {
-        var.bind_gradient(nullptr);
-    };
-    
-    // Manually bind each variable (C++14 compatible)
-    size_t index = 0;
-    auto bind_helper = [&](const auto& var) { bind_at_index(var, index++); };
-    auto unbind_helper = [&](const auto& var) { unbind_at_index(var, 0); };
-    
-    // Apply binding to each tuple element
-    index = 0;
-    apply_to_tuple(wrt_vars.args, bind_helper);
     
     // Perform backward propagation
     y.arena()->clear_gradients();
     y.arena()->propagate(y.id(), T{1});
     
-    // Unbind gradient pointers
-    apply_to_tuple(wrt_vars.args, unbind_helper);
+    // Extract gradients directly from arena's gradient workspace
+    size_t index = 0;
+    auto extract_helper = [&](const auto& var) {
+        gradients[index++] = y.arena()->gradient(var.id());
+    };
+    
+    apply_to_tuple(wrt_vars.args, extract_helper);
     
     return gradients;
 }
@@ -1979,6 +1751,237 @@ UnifiedVariable<T> sigmoid(const UnifiedVariable<T>& x) {
         x.arena()->add_expression(ExprData<T>::unary_op(OpType::Sigmoid, sigmoid_val, x.id()))
     );
 }
+
+//////////////////////////////////////////////////////////////////////////
+
+
+/**
+ * @brief Thread-local arena management for syntax sugar
+ * 
+ * This allows creating variables without explicitly passing arena parameters:
+ * 
+ * Usage:
+ *   with_arena(arena) {
+ *     auto x = make_var(2.0);  // Uses arena automatically
+ *     auto y = make_var(3.0);
+ *     auto z = x + y;          // All operations use same arena
+ *   }
+ * 
+ * Or using RAII:
+ *   {
+ *     ArenaScope scope;        // Creates and manages arena
+ *     auto x = make_var(2.0);
+ *     auto y = make_var(3.0);
+ *   }  // Arena destroyed here
+ */
+template<typename T>
+class ArenaManager {
+private:
+    static thread_local std::shared_ptr<ExpressionArena<T>> current_arena_;
+    
+public:
+    static void set_current_arena(std::shared_ptr<ExpressionArena<T>> arena) {
+        current_arena_ = arena;
+    }
+    
+    static std::shared_ptr<ExpressionArena<T>> get_current_arena() {
+        if (!current_arena_) {
+            throw std::runtime_error("No active arena. Use ArenaScope or with_arena() to set one.");
+        }
+        return current_arena_;
+    }
+    
+    static bool has_current_arena() {
+        return static_cast<bool>(current_arena_);
+    }
+    
+    static void clear_current_arena() {
+        current_arena_.reset();
+    }
+};
+
+// Static member definition
+template<typename T>
+thread_local std::shared_ptr<ExpressionArena<T>> ArenaManager<T>::current_arena_;
+
+/**
+ * @brief RAII Arena Scope Manager
+ * 
+ * Automatically creates and manages an arena for the current scope.
+ * When the scope ends, the arena is automatically cleaned up.
+ * 
+ * Usage:
+ *   {
+ *     ArenaScope<double> scope;
+ *     auto x = make_var(2.0);
+ *     auto y = make_var(3.0);
+ *     auto z = sin(x) + cos(y);
+ *   }  // Arena automatically destroyed
+ */
+template<typename T>
+class ArenaScope {
+private:
+    std::shared_ptr<ExpressionArena<T>> previous_arena_;
+    std::shared_ptr<ExpressionArena<T>> scope_arena_;
+    
+public:
+    explicit ArenaScope(size_t initial_capacity = 1000) {
+        // Save previous arena
+        previous_arena_ = ArenaManager<T>::has_current_arena() ? 
+                         ArenaManager<T>::get_current_arena() : nullptr;
+        
+        // Create new arena for this scope
+        scope_arena_ = std::make_shared<ExpressionArena<T>>();
+        scope_arena_->expressions_.reserve(initial_capacity);
+        
+        // Set as current
+        ArenaManager<T>::set_current_arena(scope_arena_);
+    }
+    
+    ~ArenaScope() {
+        // Restore previous arena
+        if (previous_arena_) {
+            ArenaManager<T>::set_current_arena(previous_arena_);
+        } else {
+            ArenaManager<T>::clear_current_arena();
+        }
+    }
+    
+    // Non-copyable, non-movable
+    ArenaScope(const ArenaScope&) = delete;
+    ArenaScope& operator=(const ArenaScope&) = delete;
+    ArenaScope(ArenaScope&&) = delete;
+    ArenaScope& operator=(ArenaScope&&) = delete;
+    
+    // Access to the arena if needed
+    std::shared_ptr<ExpressionArena<T>> arena() const { return scope_arena_; }
+};
+
+/**
+ * @brief Scoped arena context manager
+ * 
+ * Temporarily sets an arena for a block of code.
+ * 
+ * Usage:
+ *   auto arena = std::make_shared<ExpressionArena<double>>();
+ *   with_arena(arena) {
+ *     auto x = make_var(2.0);
+ *     auto y = make_var(3.0);
+ *   }
+ */
+template<typename T>
+class ScopedArenaContext {
+private:
+    std::shared_ptr<ExpressionArena<T>> previous_arena_;
+    
+public:
+    explicit ScopedArenaContext(std::shared_ptr<ExpressionArena<T>> arena) {
+        previous_arena_ = ArenaManager<T>::has_current_arena() ? 
+                         ArenaManager<T>::get_current_arena() : nullptr;
+        ArenaManager<T>::set_current_arena(arena);
+    }
+    
+    ~ScopedArenaContext() {
+        if (previous_arena_) {
+            ArenaManager<T>::set_current_arena(previous_arena_);
+        } else {
+            ArenaManager<T>::clear_current_arena();
+        }
+    }
+    
+    // Non-copyable, non-movable
+    ScopedArenaContext(const ScopedArenaContext&) = delete;
+    ScopedArenaContext& operator=(const ScopedArenaContext&) = delete;
+    ScopedArenaContext(ScopedArenaContext&&) = delete;
+    ScopedArenaContext& operator=(ScopedArenaContext&&) = delete;
+};
+
+// Macro for with_arena syntax
+#define with_arena(arena_ptr) \
+    if (auto _arena_ctx = ScopedArenaContext<double>(arena_ptr); true)
+
+/**
+ * @brief Variable Pool - High-level interface
+ * 
+ * Provides a clean, object-oriented interface for managing variables
+ * and expressions within a single arena context.
+ * 
+ * Usage:
+ *   VariablePool<double> pool;
+ *   auto x = pool.variable(2.0);
+ *   auto y = pool.variable(3.0);
+ *   auto z = pool.compute([&]() { return sin(x) + cos(y); });
+ */
+template<typename T>
+class VariablePool {
+private:
+    std::shared_ptr<ExpressionArena<T>> arena_;
+    
+public:
+    explicit VariablePool(size_t initial_capacity = 1000) 
+        : arena_(std::make_shared<ExpressionArena<T>>()) {
+        arena_->expressions_.reserve(initial_capacity);
+    }
+    
+    // Create a new variable
+    UnifiedVariable<T> variable(const T& value) {
+        return UnifiedVariable<T>(arena_, value);
+    }
+    
+    // Create a constant
+    UnifiedVariable<T> constant(const T& value) {
+        auto id = arena_->add_expression(ExprData<T>::constant(value));
+        return UnifiedVariable<T>(arena_, id);
+    }
+    
+    // Compute an expression within this pool's context
+    template<typename F>
+    auto compute(F&& func) -> decltype(func()) {
+        // Set this pool's arena as current
+        auto prev_arena = ArenaManager<T>::has_current_arena() ? 
+                         ArenaManager<T>::get_current_arena() : nullptr;
+        ArenaManager<T>::set_current_arena(arena_);
+        
+        try {
+            auto result = func();
+            
+            // Restore previous arena
+            if (prev_arena) {
+                ArenaManager<T>::set_current_arena(prev_arena);
+            } else {
+                ArenaManager<T>::clear_current_arena();
+            }
+            
+            return result;
+        } catch (...) {
+            // Restore arena even on exception
+            if (prev_arena) {
+                ArenaManager<T>::set_current_arena(prev_arena);
+            } else {
+                ArenaManager<T>::clear_current_arena();
+            }
+            throw;
+        }
+    }
+    
+    // Access to derivatives
+    template<typename... Vars>
+    std::array<T, sizeof...(Vars)> derivatives(const UnifiedVariable<T>& y, const Wrt<Vars...>& wrt_vars) {
+        return ::autodiff::reverse::unified::derivatives(y, wrt_vars);
+    }
+    
+    // Access to underlying arena if needed
+    std::shared_ptr<ExpressionArena<T>> arena() const { return arena_; }
+    
+    // Arena statistics
+    size_t expression_count() const { return arena_->size(); }
+    
+    // Clear all expressions (keeps arena alive)
+    void clear() {
+        arena_ = std::make_shared<ExpressionArena<T>>();
+    }
+};
+
 
 } // namespace unified
 } // namespace reverse
