@@ -80,13 +80,13 @@
  * AddExpr<T>                   → ExprType::Binary + OpType::Add
  * Hypot3Expr<T>                → ExprType::Ternary + OpType::Hypot3
  * Variable<T>                  → UnifiedVariable<T>
- * ExprPtr<T>                   → ExprId<T> (index into arena)
+ * ExprPtr<T>                   → ExprId (index into arena)
  *
  * MEMORY MANAGEMENT:
  * =================
  *
  * Original: Uses shared_ptr<Expr<T>> for expression trees
- * Unified:  Uses ExprId<T> indices into a flat ExpressionArena<T>
+ * Unified:  Uses ExprId indices into a flat ExpressionArena<T>
  *
  * Benefits:
  * - No reference counting overhead
@@ -160,17 +160,17 @@ template<typename T>
 class ExpressionArena;
 template<typename T>
 class UnifiedVariable;
+template<typename T>
+class UnifiedBooleanExpr;
 // Use a 32-bit index type for expression IDs. This reduces per-node memory
 // footprint on 64-bit platforms when arena sizes fit within 32 bits.
 using ExprIndex_t = uint32_t;
-template<typename T>
 using ExprId = ExprIndex_t;
 
 static_assert(sizeof(ExprIndex_t) == 4, "ExprIndex_t must be 32-bit");
 
 // Invalid expression ID constant
-template<typename T>
-constexpr ExprId<T> INVALID_EXPR_ID = std::numeric_limits<ExprIndex_t>::max();
+constexpr ExprId INVALID_EXPR_ID = std::numeric_limits<ExprIndex_t>::max();
 
 
 ///////////////////////////
@@ -482,7 +482,8 @@ enum class ExprType : uint8_t
     DependentVariable,
     Unary,
     Binary,
-    Ternary
+    Ternary,
+    Boolean  // New type for boolean expressions
 };
 
 /**
@@ -517,6 +518,9 @@ enum class OpType : uint8_t
     Sqrt,
     Abs,
     Erf,
+    
+    // Boolean unary operations
+    LogicalNot,
 
     // Binary operations
     Add,
@@ -528,6 +532,16 @@ enum class OpType : uint8_t
     Hypot2,
     PowConstantLeft,
     PowConstantRight,
+    
+    // Boolean binary operations (comparison and logical)
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    LogicalAnd,
+    LogicalOr,
 
     // Ternary operations
     Hypot3,
@@ -567,7 +581,7 @@ struct ExprData
     T value;
 
     // Child expression references (indices into flat container) - 8-byte aligned
-    std::array<ExprId<T>, 3> children;
+    std::array<ExprId, 3> children;
 
     // Pack smaller members together to minimize padding
     ExprType type;
@@ -581,9 +595,9 @@ struct ExprData
     // - is_constant : 1
     //     Marks nodes that are constant (no need to propagate gradients or
     //     update values during forward evaluation).
-    // - needs_update : 1
-    //     Indicates the node's forward value is stale and must be recomputed
-    //     before it is read (used by update/update_all paths).
+    // - requires_computation : 1
+    //     Intrinsic property: whether this expression type requires computation
+    //     (false for constants/independent variables, true for derived expressions).
     // - processed_in_backprop : 1
     //     Guard used during reverse-mode propagation so each node is visited
     //     exactly once when accumulating gradients.
@@ -598,12 +612,11 @@ struct ExprData
     //   the compact memory layout described in the file header.
     unsigned num_children : 2;
     unsigned is_constant : 1;
-    unsigned needs_update : 1;
     unsigned processed_in_backprop : 1;
 
     // Default constructor
     ExprData()
-        : value(T{0}), children{INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>}, type(ExprType::Constant), op_type(OpType::None), num_children(0), is_constant(1), needs_update(0), processed_in_backprop(0)
+        : value(T{0}), children{INVALID_EXPR_ID, INVALID_EXPR_ID, INVALID_EXPR_ID}, type(ExprType::Constant), op_type(OpType::None), num_children(0), is_constant(1), processed_in_backprop(0)
     {
     }
 
@@ -612,12 +625,11 @@ struct ExprData
     {
         ExprData data;
         data.value = val;
-        data.children = {INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
+        data.children = {INVALID_EXPR_ID, INVALID_EXPR_ID, INVALID_EXPR_ID};
         data.type = ExprType::Constant;
         data.op_type = OpType::None;
         data.num_children = 0;
         data.is_constant = 1;
-        data.needs_update = 0;
         data.processed_in_backprop = 0;
         return data;
     }
@@ -627,63 +639,59 @@ struct ExprData
     {
         ExprData data;
         data.value = val;
-        data.children = {INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
+        data.children = {INVALID_EXPR_ID, INVALID_EXPR_ID, INVALID_EXPR_ID};
         data.type = ExprType::IndependentVariable;
         data.op_type = OpType::None;
         data.num_children = 0;
         data.is_constant = 0;
-        data.needs_update = 0;
         data.processed_in_backprop = 0;
         return data;
     }
 
     // Constructor for dependent variables
-    static ExprData dependent_variable(const T& val, ExprId<T> child)
+    static ExprData dependent_variable(const T& val, ExprId child)
     {
         ExprData data;
         data.value = val;
-        data.children = {child, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
+        data.children = {child, INVALID_EXPR_ID, INVALID_EXPR_ID};
         data.type = ExprType::DependentVariable;
         data.op_type = OpType::None;
         data.num_children = 1;
         data.is_constant = 0;
-        data.needs_update = 1;
         data.processed_in_backprop = 0;
         return data;
     }
 
     // Constructor for unary operations
-    static ExprData unary_op(OpType op, const T& val, ExprId<T> child)
+    static ExprData unary_op(OpType op, const T& val, ExprId child)
     {
         ExprData data;
         data.value = val;
-        data.children = {child, INVALID_EXPR_ID<T>, INVALID_EXPR_ID<T>};
+        data.children = {child, INVALID_EXPR_ID, INVALID_EXPR_ID};
         data.type = ExprType::Unary;
         data.op_type = op;
         data.num_children = 1;
         data.is_constant = 0;
-        data.needs_update = 1;
         data.processed_in_backprop = 0;
         return data;
     }
 
     // Constructor for binary operations
-    static ExprData binary_op(OpType op, const T& val, ExprId<T> left, ExprId<T> right)
+    static ExprData binary_op(OpType op, const T& val, ExprId left, ExprId right)
     {
         ExprData data;
         data.value = val;
-        data.children = {left, right, INVALID_EXPR_ID<T>};
+        data.children = {left, right, INVALID_EXPR_ID};
         data.type = ExprType::Binary;
         data.op_type = op;
         data.num_children = 2;
         data.is_constant = 0;
-        data.needs_update = 1;
         data.processed_in_backprop = 0;
         return data;
     }
 
     // Constructor for ternary operations
-    static ExprData ternary_op(OpType op, const T& val, ExprId<T> left, ExprId<T> center, ExprId<T> right)
+    static ExprData ternary_op(OpType op, const T& val, ExprId left, ExprId center, ExprId right)
     {
         ExprData data;
         data.value = val;
@@ -692,11 +700,162 @@ struct ExprData
         data.op_type = op;
         data.num_children = 3;
         data.is_constant = 0;
-        data.needs_update = 1;
+        data.processed_in_backprop = 0;
+        return data;
+    }
+
+    // Factory method for boolean constants
+    static ExprData boolean_constant(bool val)
+    {
+        ExprData data;
+        data.value = val ? T{1} : T{0};  // Use T{1} for true, T{0} for false
+        data.children = {INVALID_EXPR_ID, INVALID_EXPR_ID, INVALID_EXPR_ID};
+        data.type = ExprType::Boolean;
+        data.op_type = OpType::None;
+        data.num_children = 0;
+        data.is_constant = 1;
+        data.processed_in_backprop = 0;
+        return data;
+    }
+
+    // Factory method for boolean unary operations
+    static ExprData boolean_unary_op(OpType op, bool val, ExprId child)
+    {
+        ExprData data;
+        data.value = val ? T{1} : T{0};
+        data.children = {child, INVALID_EXPR_ID, INVALID_EXPR_ID};
+        data.type = ExprType::Boolean;
+        data.op_type = op;
+        data.num_children = 1;
+        data.is_constant = 0;
+        data.processed_in_backprop = 0;
+        return data;
+    }
+
+    // Factory method for boolean binary operations
+    static ExprData boolean_binary_op(OpType op, bool val, ExprId left, ExprId right)
+    {
+        ExprData data;
+        data.value = val ? T{1} : T{0};
+        data.children = {left, right, INVALID_EXPR_ID};
+        data.type = ExprType::Boolean;
+        data.op_type = op;
+        data.num_children = 2;
+        data.is_constant = 0;
+        data.processed_in_backprop = 0;
+        return data;
+    }
+
+    // Factory method for comparison operations (creates boolean expressions)
+    static ExprData comparison_op(OpType op, bool val, ExprId left, ExprId right)
+    {
+        ExprData data;
+        data.value = val ? T{1} : T{0};
+        data.children = {left, right, INVALID_EXPR_ID};
+        data.type = ExprType::Boolean;
+        data.op_type = op;
+        data.num_children = 2;
+        data.is_constant = 0;
+        data.processed_in_backprop = 0;
+        return data;
+    }
+
+    // Modified conditional factory method - now takes boolean expression ID as predicate
+    static ExprData conditional_op(const T& val, ExprId predicate_id, ExprId left, ExprId right)
+    {
+        ExprData data;
+        data.value = val;
+        data.children = {predicate_id, left, right};  // predicate is now first child
+        data.type = ExprType::Ternary;
+        data.op_type = OpType::Conditional;
+        data.num_children = 3;  // predicate + left + right children
+        data.is_constant = 0;
         data.processed_in_backprop = 0;
         return data;
     }
 };
+
+/**
+ * @brief Unified Boolean Expression class
+ *
+ * This class represents boolean expressions as regular expressions in the arena.
+ * Unlike the original BooleanExpr which used std::function, this is fully
+ * integrated with the arena-based system.
+ */
+template<typename T>
+class UnifiedBooleanExpr
+{
+private:
+    std::shared_ptr<ExpressionArena<T>> arena_;
+    ExprId expr_id_;
+
+public:
+    // Constructor from expression ID
+    UnifiedBooleanExpr(std::shared_ptr<ExpressionArena<T>> arena_ptr, ExprId id)
+        : arena_(arena_ptr), expr_id_(id) {}
+
+    // Constructor for constant boolean
+    UnifiedBooleanExpr(std::shared_ptr<ExpressionArena<T>> arena_ptr, bool value)
+        : arena_(arena_ptr)
+    {
+        expr_id_ = arena_->add_expression(ExprData<T>::boolean_constant(value));
+    }
+
+    // Get the boolean value (T{0} = false, T{1} = true)
+    bool value() const
+    {
+        return (*arena_)[expr_id_].value != T{0};
+    }
+
+    // Update the expression (evaluates the boolean condition)
+    void update()
+    {
+        // Boolean expressions are automatically updated when their dependencies change
+        // No explicit update needed in the arena-based system
+    }
+
+    // Conversion to bool
+    operator bool() const { return value(); }
+
+    // Logical negation
+    UnifiedBooleanExpr operator!() const
+    {
+        auto result_id = arena_->add_expression(
+            ExprData<T>::boolean_unary_op(OpType::LogicalNot, !value(), expr_id_));
+        return UnifiedBooleanExpr(arena_, result_id);
+    }
+
+    // Logical AND
+    UnifiedBooleanExpr operator&&(const UnifiedBooleanExpr& other) const
+    {
+        ensure_same_arena(other);
+        auto result_id = arena_->add_expression(
+            ExprData<T>::boolean_binary_op(OpType::LogicalAnd, value() && other.value(), expr_id_, other.expr_id_));
+        return UnifiedBooleanExpr(arena_, result_id);
+    }
+
+    // Logical OR
+    UnifiedBooleanExpr operator||(const UnifiedBooleanExpr& other) const
+    {
+        ensure_same_arena(other);
+        auto result_id = arena_->add_expression(
+            ExprData<T>::boolean_binary_op(OpType::LogicalOr, value() || other.value(), expr_id_, other.expr_id_));
+        return UnifiedBooleanExpr(arena_, result_id);
+    }
+
+    // Get expression ID and arena for internal use
+    ExprId id() const { return expr_id_; }
+    std::shared_ptr<ExpressionArena<T>> arena() const { return arena_; }
+
+private:
+    void ensure_same_arena(const UnifiedBooleanExpr& other) const
+    {
+        if(arena_ != other.arena_) {
+            throw std::runtime_error("Boolean expressions must belong to the same expression arena");
+        }
+    }
+};
+
 
 /**
  * @brief Flat expression container/arena
@@ -738,6 +897,7 @@ class ExpressionArena
     {
         this->reserve(1000); // Reserve some initial capacity
     }
+    
     void reserve(size_t new_capacity)
     {
         expressions_.reserve(new_capacity);
@@ -745,28 +905,65 @@ class ExpressionArena
     }
 
     // Add expression to arena and return its ID
-    ExprId<T> add_expression(ExprData<T>&& expr)
+    ExprId add_expression(ExprData<T>&& expr)
     {
         // Ensure we won't overflow the 32-bit ExprIndex_t
         if(expressions_.size() >= static_cast<size_t>(std::numeric_limits<ExprIndex_t>::max())) {
             throw std::runtime_error("Expression arena exceeded maximum index for ExprId");
         }
 
-        ExprId<T> id = expressions_.size();
+        auto id = expressions_.size();
+        
+        // Add the expression
         expressions_.emplace_back(std::move(expr));
         gradient_workspace_.resize(expressions_.size(), T{0});
-        // Debug check: ensure the gradient workspace stays aligned with expressions_
+        
+        // Debug check: ensure all containers stay aligned
         assert(expressions_.size() == gradient_workspace_.size());
         return id;
     }
 
+    // Add boolean expression to arena and return its ID
+    ExprId add_boolean_expression(ExprId left_id, ExprId right_id, OpType comparison_op)
+    {
+        // Evaluate the comparison to get the boolean result
+        const T& left_val = expressions_[left_id].value;
+        const T& right_val = expressions_[right_id].value;
+        
+        bool result = false;
+        switch(comparison_op) {
+        case OpType::Equal:
+            result = (left_val == right_val);
+            break;
+        case OpType::NotEqual:
+            result = (left_val != right_val);
+            break;
+        case OpType::Less:
+            result = (left_val < right_val);
+            break;
+        case OpType::LessEqual:
+            result = (left_val <= right_val);
+            break;
+        case OpType::Greater:
+            result = (left_val > right_val);
+            break;
+        case OpType::GreaterEqual:
+            result = (left_val >= right_val);
+            break;
+        default:
+            throw std::runtime_error("Invalid comparison operation");
+        }
+        
+        return add_expression(ExprData<T>::boolean_binary_op(comparison_op, result, left_id, right_id));
+    }
+
     // Access expression by ID
-    ExprData<T>& operator[](ExprId<T> id)
+    ExprData<T>& operator[](ExprId id)
     {
         return expressions_[id];
     }
 
-    const ExprData<T>& operator[](ExprId<T> id) const
+    const ExprData<T>& operator[](ExprId id) const
     {
         return expressions_[id];
     }
@@ -776,52 +973,44 @@ class ExpressionArena
     {
         return expressions_.size();
     }
-
-    // Update all expressions (forward pass)
-    void update_all()
+    
+    bool empty() const
     {
-        for(size_t i = 0; i < expressions_.size(); ++i) {
-            if(expressions_[i].needs_update) {
-                update_expression(i);
-            }
-        }
+        return expressions_.empty();
     }
+
+    // !!! Please keep the function UNALTERED in the comments below !!!
 
     // Update a specific expression
-    void update_expression(ExprId<T> id)
-    {
-        auto& expr = expressions_[id];
-
-        switch(expr.type) {
-        case ExprType::Constant:
-        case ExprType::IndependentVariable:
-            // No update needed
-            break;
-
-        case ExprType::DependentVariable:
-            // Update from child expression
-            if(expr.children[0] != INVALID_EXPR_ID<T>) {
-                update_expression(expr.children[0]);
-                expr.value = expressions_[expr.children[0]].value;
-            }
-            break;
-
-        case ExprType::Unary:
-            update_unary(expr);
-            break;
-
-        case ExprType::Binary:
-            update_binary(expr);
-            break;
-
-        case ExprType::Ternary:
-            update_ternary(expr);
-            break;
-        }
-    }
+    // void update_expression(ExprId id)
+    // {
+    //     auto& expr = expressions_[id];
+    //     switch(expr.type) {
+    //     case ExprType::Constant:
+    //     case ExprType::IndependentVariable:
+    //         // These don't need computation, mark as fresh
+    //         break;
+    //     case ExprType::DependentVariable:
+    //         // Update from child expression
+    //         if(expr.children[0] != INVALID_EXPR_ID) {
+    //             update_expression(expr.children[0]);
+    //             expr.value = expressions_[expr.children[0]].value;
+    //         }
+    //         break;
+    //     case ExprType::Unary:
+    //         update_unary(expr);
+    //         break;
+    //     case ExprType::Binary:
+    //         update_binary(expr);
+    //         break;
+    //     case ExprType::Ternary:
+    //         update_ternary(expr);
+    //         break;
+    //     }
+    // }
 
     // Propagate derivatives (backward pass)
-    void propagate(ExprId<T> root_id, const T& wprime = T{1})
+    void propagate(ExprId root_id, const T& wprime = T{1})
     {
         // Clear gradient workspace and reset processed flags
         // Ensure gradient workspace is aligned before we write into it.
@@ -836,7 +1025,7 @@ class ExpressionArena
 
         // Propagate in reverse topological order
         for(size_t i = expressions_.size(); i > 0; --i) {
-            ExprId<T> expr_id = i - 1;
+            ExprId expr_id = i - 1;
             auto& expr = expressions_[expr_id];
             T current_grad = gradient_workspace_[expr_id];
 
@@ -860,7 +1049,7 @@ class ExpressionArena
     }
 
     // Get gradient for a specific expression
-    T gradient(ExprId<T> expr_id) const
+    T gradient(ExprId expr_id) const
     {
         return gradient_workspace_[expr_id];
     }
@@ -872,10 +1061,14 @@ class ExpressionArena
     }
 
   private:
+
+    // !!! Please keep the function UNALTERED in the comments below !!!
+    /* * (vestigial)
+
     void update_unary(ExprData<T>& expr)
-    {
-        if(expr.children[0] == INVALID_EXPR_ID<T>)
-            return;
+   {
+       if(expr.children[0] == INVALID_EXPR_ID)
+           return;
 
         // Update child first
         update_expression(expr.children[0]);
@@ -947,7 +1140,7 @@ class ExpressionArena
 
     void update_binary(ExprData<T>& expr)
     {
-        if(expr.children[0] == INVALID_EXPR_ID<T> || expr.children[1] == INVALID_EXPR_ID<T>)
+        if(expr.children[0] == INVALID_EXPR_ID || expr.children[1] == INVALID_EXPR_ID)
             return;
 
         // Update children first
@@ -992,30 +1185,53 @@ class ExpressionArena
 
     void update_ternary(ExprData<T>& expr)
     {
-        if(expr.children[0] == INVALID_EXPR_ID<T> ||
-           expr.children[1] == INVALID_EXPR_ID<T> ||
-           expr.children[2] == INVALID_EXPR_ID<T>)
-            return;
-
-        // Update children first
-        update_expression(expr.children[0]);
-        update_expression(expr.children[1]);
-        update_expression(expr.children[2]);
-
-        const T& left_val = expressions_[expr.children[0]].value;
-        const T& center_val = expressions_[expr.children[1]].value;
-        const T& right_val = expressions_[expr.children[2]].value;
-
         switch(expr.op_type) {
         case OpType::Hypot3:
+        {
+            if(expr.children[0] == INVALID_EXPR_ID ||
+               expr.children[1] == INVALID_EXPR_ID ||
+               expr.children[2] == INVALID_EXPR_ID)
+                return;
+
+            // Update children first
+            update_expression(expr.children[0]);
+            update_expression(expr.children[1]);
+            update_expression(expr.children[2]);
+
+            const T& left_val = expressions_[expr.children[0]].value;
+            const T& center_val = expressions_[expr.children[1]].value;
+            const T& right_val = expressions_[expr.children[2]].value;
+
             expr.value = std::hypot(left_val, center_val, right_val);
             break;
+        }
+        case OpType::Conditional:
+        {
+            if(expr.children[0] == INVALID_EXPR_ID ||
+               expr.children[1] == INVALID_EXPR_ID ||
+               !expr.predicate)
+                return;
+
+            // Update the boolean predicate first
+            expr.predicate->update();
+
+            // Update the appropriate branch based on predicate
+            if(expr.predicate->val) {
+                update_expression(expr.children[0]);  // left branch
+                expr.value = expressions_[expr.children[0]].value;
+            } else {
+                update_expression(expr.children[1]);  // right branch
+                expr.value = expressions_[expr.children[1]].value;
+            }
+            break;
+        }
         default:
             throw std::runtime_error("Unknown ternary operation");
         }
     }
+    * */
 
-    void propagate_expression(ExprId<T> expr_id, const T& wprime)
+    void propagate_expression(ExprId expr_id, const T& wprime)
     {
         auto& expr = expressions_[expr_id];
 
@@ -1029,9 +1245,15 @@ class ExpressionArena
             break;
 
         case ExprType::DependentVariable:
-            if(expr.children[0] != INVALID_EXPR_ID<T>) {
+            if(expr.children[0] != INVALID_EXPR_ID) {
                 gradient_workspace_[expr.children[0]] += wprime;
             }
+            break;
+
+        case ExprType::Boolean:
+            // Boolean expressions don't contribute to gradients
+            // but we still need to propagate to their children for dependency tracking
+            propagate_boolean(expr, wprime);
             break;
 
         case ExprType::Unary:
@@ -1050,7 +1272,7 @@ class ExpressionArena
 
     void propagate_unary(const ExprData<T>& expr, const T& wprime)
     {
-        if(expr.children[0] == INVALID_EXPR_ID<T>)
+        if(expr.children[0] == INVALID_EXPR_ID)
             return;
 
         const T& child_val = expressions_[expr.children[0]].value;
@@ -1133,7 +1355,7 @@ class ExpressionArena
 
     void propagate_binary(const ExprData<T>& expr, const T& wprime)
     {
-        if(expr.children[0] == INVALID_EXPR_ID<T> || expr.children[1] == INVALID_EXPR_ID<T>)
+        if(expr.children[0] == INVALID_EXPR_ID || expr.children[1] == INVALID_EXPR_ID)
             return;
 
         const T& left_val = expressions_[expr.children[0]].value;
@@ -1200,26 +1422,51 @@ class ExpressionArena
 
     void propagate_ternary(const ExprData<T>& expr, const T& wprime)
     {
-        if(expr.children[0] == INVALID_EXPR_ID<T> ||
-           expr.children[1] == INVALID_EXPR_ID<T> ||
-           expr.children[2] == INVALID_EXPR_ID<T>)
-            return;
-
-        const T& left_val = expressions_[expr.children[0]].value;
-        const T& center_val = expressions_[expr.children[1]].value;
-        const T& right_val = expressions_[expr.children[2]].value;
-
         switch(expr.op_type) {
         case OpType::Hypot3: {
+            if(expr.children[0] == INVALID_EXPR_ID ||
+               expr.children[1] == INVALID_EXPR_ID ||
+               expr.children[2] == INVALID_EXPR_ID)
+                return;
+
+            const T& left_val = expressions_[expr.children[0]].value;
+            const T& center_val = expressions_[expr.children[1]].value;
+            const T& right_val = expressions_[expr.children[2]].value;
+
             const auto& hypot_val = expr.value;
             gradient_workspace_[expr.children[0]] += wprime * left_val / hypot_val;
             gradient_workspace_[expr.children[1]] += wprime * center_val / hypot_val;
             gradient_workspace_[expr.children[2]] += wprime * right_val / hypot_val;
             break;
         }
+        case OpType::Conditional: {
+            if(expr.children[0] == INVALID_EXPR_ID ||  // predicate
+               expr.children[1] == INVALID_EXPR_ID ||  // left branch
+               expr.children[2] == INVALID_EXPR_ID)    // right branch
+                return;
+
+            // Get the boolean predicate value
+            bool predicate_val = expressions_[expr.children[0]].value != T{0};
+
+            // Propagate gradient only to the branch that was actually taken
+            if(predicate_val) {
+                gradient_workspace_[expr.children[1]] += wprime;  // left branch
+            } else {
+                gradient_workspace_[expr.children[2]] += wprime;  // right branch
+            }
+            break;
+        }
         default:
             throw std::runtime_error("Unknown ternary operation in propagation");
         }
+    }
+
+    void propagate_boolean(const ExprData<T>& expr, const T& wprime)
+    {
+        // Boolean expressions don't have gradients in the traditional sense,
+        // but we need to handle dependency tracking for conditional expressions
+        // For now, we don't propagate gradients through boolean expressions
+        // This matches the behavior of the original system
     }
 };
 
@@ -1234,7 +1481,7 @@ class ExpressionArena
  *
  * STORAGE:
  * Original: Contains ExprPtr<T> (shared_ptr to expression tree)
- * Unified:  Contains ExprId<T> (index into arena) + arena pointer
+ * Unified:  Contains ExprId (index into arena) + arena pointer
  *
  * EXPRESSION CREATION:
  * Original: Operations create new shared_ptr objects
@@ -1272,7 +1519,7 @@ class UnifiedVariable
 {
   private:
     std::shared_ptr<ExpressionArena<T>> arena_;
-    ExprId<T> expr_id_;
+    ExprId expr_id_;
 
   public:
     // Constructor for independent variable
@@ -1283,7 +1530,7 @@ class UnifiedVariable
     }
 
     // Constructor from existing expression ID
-    UnifiedVariable(std::shared_ptr<ExpressionArena<T>> arena_ptr, ExprId<T> id)
+    UnifiedVariable(std::shared_ptr<ExpressionArena<T>> arena_ptr, ExprId id)
         : arena_(arena_ptr), expr_id_(id) {}
 
     // Default constructor (creates a constant zero)
@@ -1308,45 +1555,40 @@ class UnifiedVariable
         return *this;
     }
 
-    // Get value
-    T value() const
-    {
-        arena_->update_expression(expr_id_);
-        return (*arena_)[expr_id_].value;
-    }
-
     // Fast access to stored value without forcing an update. Use this during
     // expression construction to avoid triggering expensive forward updates.
     // The stored value is the value that was set when the expression node
     // was created; reading it avoids recursive update passes during build.
-    T raw_value() const
+    T value() const
     {
         return (*arena_)[expr_id_].value;
     }
 
     // Get expression ID
-    ExprId<T> id() const { return expr_id_; }
+    ExprId id() const { return expr_id_; }
 
     // Get arena
     std::shared_ptr<ExpressionArena<T>> arena() const { return arena_; }
 
     // Update this variable's value (for independent variables only)
-    void update(const T& new_value)
-    {
-        auto& expr = (*arena_)[expr_id_];
-        if(expr.type == ExprType::IndependentVariable) {
-            expr.value = new_value;
-        } else {
-            throw std::runtime_error("Cannot update value of dependent variable");
-        }
-    }
+    // void hot_update(const T& new_value)
+    // {
+    //     auto& expr = (*arena_)[expr_id_];
+    //     if(expr.type == ExprType::IndependentVariable) {
+    //         expr.value = new_value;
+    //         // Invalidate all dependent expressions in the arena
+    //         arena_->invalidate_dependents(expr_id_);
+    //     } else {
+    //         throw std::runtime_error("Cannot update value of dependent variable");
+    //     }
+    // }
 
     // Arithmetic operators
     UnifiedVariable operator+(const UnifiedVariable& other) const
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Add, raw_value() + other.raw_value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Add, value() + other.value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1354,7 +1596,7 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Sub, raw_value() - other.raw_value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Sub, value() - other.value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1362,7 +1604,7 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Mul, raw_value() * other.raw_value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Mul, value() * other.value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1370,14 +1612,14 @@ class UnifiedVariable
     {
         ensure_same_arena(other);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Div, raw_value() / other.raw_value(), expr_id_, other.expr_id_));
+            ExprData<T>::binary_op(OpType::Div, value() / other.value(), expr_id_, other.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable operator-() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Negate, -raw_value(), expr_id_));
+            ExprData<T>::unary_op(OpType::Negate, -value(), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1388,7 +1630,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Add, raw_value() + static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Add, value() + static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1398,7 +1640,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Sub, raw_value() - static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Sub, value() - static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1408,7 +1650,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Mul, raw_value() * static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Mul, value() * static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1418,7 +1660,7 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Div, raw_value() / static_cast<T>(scalar), expr_id_, constant_id));
+            ExprData<T>::binary_op(OpType::Div, value() / static_cast<T>(scalar), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1451,49 +1693,49 @@ class UnifiedVariable
     UnifiedVariable sin() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Sin, std::sin(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Sin, std::sin(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable cos() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Cos, std::cos(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Cos, std::cos(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable tan() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Tan, std::tan(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Tan, std::tan(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable exp() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Exp, std::exp(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Exp, std::exp(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable log() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Log, std::log(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Log, std::log(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable sqrt() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Sqrt, std::sqrt(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Sqrt, std::sqrt(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
     UnifiedVariable abs() const
     {
         auto result_id = arena_->add_expression(
-            ExprData<T>::unary_op(OpType::Abs, std::abs(raw_value()), expr_id_));
+            ExprData<T>::unary_op(OpType::Abs, std::abs(value()), expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1501,7 +1743,7 @@ class UnifiedVariable
     {
         ensure_same_arena(exponent);
         auto result_id = arena_->add_expression(
-            ExprData<T>::binary_op(OpType::Pow, std::pow(raw_value(), exponent.raw_value()), expr_id_, exponent.expr_id_));
+            ExprData<T>::binary_op(OpType::Pow, std::pow(value(), exponent.value()), expr_id_, exponent.expr_id_));
         return UnifiedVariable(arena_, result_id);
     }
 
@@ -1511,14 +1753,14 @@ class UnifiedVariable
     {
         auto constant_id = arena_->add_expression(ExprData<T>::constant(static_cast<T>(exponent)));
     auto result_id = arena_->add_expression(
-        ExprData<T>::binary_op(OpType::PowConstantRight, std::pow(raw_value(), static_cast<T>(exponent)), expr_id_, constant_id));
+        ExprData<T>::binary_op(OpType::PowConstantRight, std::pow(value(), static_cast<T>(exponent)), expr_id_, constant_id));
         return UnifiedVariable(arena_, result_id);
     }
 
     // Conversion operators
     explicit operator T() const { return value(); }
 
-  private:
+  public:
     void ensure_same_arena(const UnifiedVariable& other) const
     {
         if(arena_ != other.arena_) {
@@ -1574,7 +1816,7 @@ template<typename T>
 UnifiedVariable<T> erf(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Erf, std::erf(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::Erf, std::erf(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1584,7 +1826,7 @@ template<typename T>
 UnifiedVariable<T> sinh(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Sinh, std::sinh(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::Sinh, std::sinh(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1592,7 +1834,7 @@ template<typename T>
 UnifiedVariable<T> cosh(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Cosh, std::cosh(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::Cosh, std::cosh(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1600,7 +1842,7 @@ template<typename T>
 UnifiedVariable<T> tanh(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Tanh, std::tanh(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::Tanh, std::tanh(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1608,7 +1850,7 @@ template<typename T>
 UnifiedVariable<T> asin(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::ArcSin, std::asin(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::ArcSin, std::asin(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1616,7 +1858,7 @@ template<typename T>
 UnifiedVariable<T> acos(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::ArcCos, std::acos(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::ArcCos, std::acos(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1624,7 +1866,7 @@ template<typename T>
 UnifiedVariable<T> atan(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::ArcTan, std::atan(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::ArcTan, std::atan(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1632,7 +1874,7 @@ template<typename T>
 UnifiedVariable<T> log10(const UnifiedVariable<T>& x)
 {
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::unary_op(OpType::Log10, std::log10(x.raw_value()), x.id()));
+        ExprData<T>::unary_op(OpType::Log10, std::log10(x.value()), x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1640,11 +1882,11 @@ template<typename T>
 UnifiedVariable<T> sigmoid(const UnifiedVariable<T>& x)
 {
     T val;
-    if(x.raw_value() >= 0) {
-        const auto e = std::exp(-x.raw_value());
+    if(x.value() >= 0) {
+        const auto e = std::exp(-x.value());
         val = T{1} / (T{1} + e);
     } else {
-        const auto e = std::exp(x.raw_value());
+        const auto e = std::exp(x.value());
         val = e / (T{1} + e);
     }
     auto result_id = x.arena()->add_expression(
@@ -1659,7 +1901,7 @@ UnifiedVariable<T> atan2(const UnifiedVariable<T>& y, const UnifiedVariable<T>& 
         throw std::runtime_error("Variables must belong to the same expression arena");
     }
     auto result_id = y.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.raw_value(), x.raw_value()), y.id(), x.id()));
+        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.value(), x.value()), y.id(), x.id()));
     return UnifiedVariable<T>(y.arena(), result_id);
 }
 
@@ -1669,7 +1911,7 @@ atan2(const U& y, const UnifiedVariable<T>& x)
 {
     auto constant_id = x.arena()->add_expression(ExprData<T>::constant(static_cast<T>(y)));
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(static_cast<T>(y), x.raw_value()), constant_id, x.id()));
+        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(static_cast<T>(y), x.value()), constant_id, x.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1679,7 +1921,7 @@ atan2(const UnifiedVariable<T>& y, const U& x)
 {
     auto constant_id = y.arena()->add_expression(ExprData<T>::constant(static_cast<T>(x)));
     auto result_id = y.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.raw_value(), static_cast<T>(x)), y.id(), constant_id));
+        ExprData<T>::binary_op(OpType::ArcTan2, std::atan2(y.value(), static_cast<T>(x)), y.id(), constant_id));
     return UnifiedVariable<T>(y.arena(), result_id);
 }
 
@@ -1690,7 +1932,7 @@ UnifiedVariable<T> hypot(const UnifiedVariable<T>& x, const UnifiedVariable<T>& 
         throw std::runtime_error("Variables must belong to the same expression arena");
     }
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.raw_value(), y.raw_value()), x.id(), y.id()));
+        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.value(), y.value()), x.id(), y.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1700,7 +1942,7 @@ hypot(const U& x, const UnifiedVariable<T>& y)
 {
     auto constant_id = y.arena()->add_expression(ExprData<T>::constant(static_cast<T>(x)));
     auto result_id = y.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(static_cast<T>(x), y.raw_value()), constant_id, y.id()));
+        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(static_cast<T>(x), y.value()), constant_id, y.id()));
     return UnifiedVariable<T>(y.arena(), result_id);
 }
 
@@ -1710,7 +1952,7 @@ hypot(const UnifiedVariable<T>& x, const U& y)
 {
     auto constant_id = x.arena()->add_expression(ExprData<T>::constant(static_cast<T>(y)));
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.raw_value(), static_cast<T>(y)), x.id(), constant_id));
+        ExprData<T>::binary_op(OpType::Hypot2, std::hypot(x.value(), static_cast<T>(y)), x.id(), constant_id));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1721,7 +1963,7 @@ UnifiedVariable<T> hypot(const UnifiedVariable<T>& x, const UnifiedVariable<T>& 
         throw std::runtime_error("Variables must belong to the same expression arena");
     }
     auto result_id = x.arena()->add_expression(
-        ExprData<T>::ternary_op(OpType::Hypot3, std::hypot(x.raw_value(), y.raw_value(), z.raw_value()), x.id(), y.id(), z.id()));
+        ExprData<T>::ternary_op(OpType::Hypot3, std::hypot(x.value(), y.value(), z.value()), x.id(), y.id(), z.id()));
     return UnifiedVariable<T>(x.arena(), result_id);
 }
 
@@ -1777,7 +2019,7 @@ pow(const U& base, const UnifiedVariable<T>& exponent)
 {
     auto constant_id = exponent.arena()->add_expression(ExprData<T>::constant(static_cast<T>(base)));
     auto result_id = exponent.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::PowConstantLeft, std::pow(static_cast<T>(base), exponent.raw_value()), constant_id, exponent.id()));
+        ExprData<T>::binary_op(OpType::PowConstantLeft, std::pow(static_cast<T>(base), exponent.value()), constant_id, exponent.id()));
     return UnifiedVariable<T>(exponent.arena(), result_id);
 }
 
@@ -1795,7 +2037,7 @@ operator-(const U& scalar, const UnifiedVariable<T>& var)
 {
     auto constant_id = var.arena()->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
     auto result_id = var.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Sub, static_cast<T>(scalar) - var.raw_value(), constant_id, var.id()));
+        ExprData<T>::binary_op(OpType::Sub, static_cast<T>(scalar) - var.value(), constant_id, var.id()));
     return UnifiedVariable<T>(var.arena(), result_id);
 }
 
@@ -1812,8 +2054,295 @@ operator/(const U& scalar, const UnifiedVariable<T>& var)
 {
     auto constant_id = var.arena()->add_expression(ExprData<T>::constant(static_cast<T>(scalar)));
     auto result_id = var.arena()->add_expression(
-        ExprData<T>::binary_op(OpType::Div, static_cast<T>(scalar) / var.raw_value(), constant_id, var.id()));
+        ExprData<T>::binary_op(OpType::Div, static_cast<T>(scalar) / var.value(), constant_id, var.id()));
     return UnifiedVariable<T>(var.arena(), result_id);
+}
+
+//------------------------------------------------------------------------------
+// COMPARISON OPERATORS
+//------------------------------------------------------------------------------
+
+/**
+ * @brief Create comparison expression between two variables
+ *
+ * This function creates a UnifiedBooleanExpr that compares two UnifiedVariable objects
+ * using the specified comparison operation. The comparison is evaluated in the arena.
+ */
+template<typename T>
+UnifiedBooleanExpr<T> expr_comparison(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r, OpType comparison_op)
+{
+    auto arena = l.arena(); // Both should use the same arena
+    auto bool_id = arena->add_boolean_expression(l.id(), r.id(), comparison_op);
+    return UnifiedBooleanExpr<T>(arena, bool_id);
+}
+
+/**
+ * @brief Create comparison expression between variable and scalar
+ */
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+expr_comparison(const UnifiedVariable<T>& l, const U& r, OpType comparison_op)
+{
+    auto arena = l.arena();
+    auto scalar_id = arena->add_expression(ExprData<T>::constant(static_cast<T>(r)));
+    auto bool_id = arena->add_boolean_expression(l.id(), scalar_id, comparison_op);
+    return UnifiedBooleanExpr<T>(arena, bool_id);
+}
+
+/**
+ * @brief Create comparison expression between scalar and variable
+ */
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+expr_comparison(const U& l, const UnifiedVariable<T>& r, OpType comparison_op)
+{
+    auto arena = r.arena();
+    auto scalar_id = arena->add_expression(ExprData<T>::constant(static_cast<T>(l)));
+    auto bool_id = arena->add_boolean_expression(scalar_id, r.id(), comparison_op);
+    return UnifiedBooleanExpr<T>(arena, bool_id);
+}
+
+// Comparison operators for UnifiedVariable
+template<typename T>
+UnifiedBooleanExpr<T> operator==(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r)
+{
+    l.ensure_same_arena(r);
+    return expr_comparison(l, r, OpType::Equal);
+}
+
+template<typename T>
+UnifiedBooleanExpr<T> operator!=(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r)
+{
+    l.ensure_same_arena(r);
+    return expr_comparison(l, r, OpType::NotEqual);
+}
+
+template<typename T>
+UnifiedBooleanExpr<T> operator<(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r)
+{
+    l.ensure_same_arena(r);
+    return expr_comparison(l, r, OpType::Less);
+}
+
+template<typename T>
+UnifiedBooleanExpr<T> operator<=(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r)
+{
+    l.ensure_same_arena(r);
+    return expr_comparison(l, r, OpType::LessEqual);
+}
+
+template<typename T>
+UnifiedBooleanExpr<T> operator>(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r)
+{
+    l.ensure_same_arena(r);
+    return expr_comparison(l, r, OpType::Greater);
+}
+
+template<typename T>
+UnifiedBooleanExpr<T> operator>=(const UnifiedVariable<T>& l, const UnifiedVariable<T>& r)
+{
+    l.ensure_same_arena(r);
+    return expr_comparison(l, r, OpType::GreaterEqual);
+}
+
+// Comparison operators with scalars
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator==(const UnifiedVariable<T>& l, const U& r)
+{
+    return expr_comparison(l, r, OpType::Equal);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator!=(const UnifiedVariable<T>& l, const U& r)
+{
+    return expr_comparison(l, r, OpType::NotEqual);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator<(const UnifiedVariable<T>& l, const U& r)
+{
+    return expr_comparison(l, r, OpType::Less);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator<=(const UnifiedVariable<T>& l, const U& r)
+{
+    return expr_comparison(l, r, OpType::LessEqual);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator>(const UnifiedVariable<T>& l, const U& r)
+{
+    return expr_comparison(l, r, OpType::Greater);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator>=(const UnifiedVariable<T>& l, const U& r)
+{
+    return expr_comparison(l, r, OpType::GreaterEqual);
+}
+
+// Scalar comparison operators (left side scalar)
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator==(const U& l, const UnifiedVariable<T>& r)
+{
+    return expr_comparison(l, r, OpType::Equal);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator!=(const U& l, const UnifiedVariable<T>& r)
+{
+    return expr_comparison(l, r, OpType::NotEqual);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator<(const U& l, const UnifiedVariable<T>& r)
+{
+    return expr_comparison(l, r, OpType::Less);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator<=(const U& l, const UnifiedVariable<T>& r)
+{
+    return expr_comparison(l, r, OpType::LessEqual);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator>(const U& l, const UnifiedVariable<T>& r)
+{
+    return expr_comparison(l, r, OpType::Greater);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedBooleanExpr<T>>::type
+operator>=(const U& l, const UnifiedVariable<T>& r)
+{
+    return expr_comparison(l, r, OpType::GreaterEqual);
+}
+
+//------------------------------------------------------------------------------
+// CONDITION AND RELATED FUNCTIONS
+//------------------------------------------------------------------------------
+
+/**
+ * @brief Conditional expression function
+ *
+ * Creates a conditional expression that selects between two values based on a boolean predicate.
+ * This is equivalent to the condition() function in the original var.hpp implementation.
+ *
+ * @param predicate Boolean expression determining which branch to take
+ * @param true_expr Expression returned when predicate is true
+ * @param false_expr Expression returned when predicate is false
+ * @return UnifiedVariable representing the conditional expression
+ */
+template<typename T>
+UnifiedVariable<T> condition(const UnifiedBooleanExpr<T>& predicate, const UnifiedVariable<T>& true_expr, const UnifiedVariable<T>& false_expr)
+{
+    true_expr.ensure_same_arena(false_expr);
+    
+    // Update predicate to get current value for initial evaluation
+    bool pred_value = predicate.value();
+    T initial_value = pred_value ? true_expr.value() : false_expr.value();
+    
+    auto result_id = true_expr.arena()->add_expression(
+        ExprData<T>::conditional_op(initial_value, predicate.id(), true_expr.id(), false_expr.id()));
+    return UnifiedVariable<T>(true_expr.arena(), result_id);
+}
+
+/**
+ * @brief Conditional expression with scalar branches
+ */
+template<typename T, typename U, typename V>
+typename std::enable_if<std::is_arithmetic<U>::value && std::is_arithmetic<V>::value, UnifiedVariable<T>>::type
+condition(const UnifiedBooleanExpr<T>& predicate, const U& true_val, const V& false_val)
+{
+    auto arena = predicate.arena();
+    auto true_id = arena->add_expression(ExprData<T>::constant(static_cast<T>(true_val)));
+    auto false_id = arena->add_expression(ExprData<T>::constant(static_cast<T>(false_val)));
+    
+    bool pred_value = predicate.value();
+    T initial_value = pred_value ? static_cast<T>(true_val) : static_cast<T>(false_val);
+    
+    auto result_id = arena->add_expression(
+        ExprData<T>::conditional_op(initial_value, predicate.id(), true_id, false_id));
+    return UnifiedVariable<T>(arena, result_id);
+}
+
+/**
+ * @brief Conditional expression with mixed variable/scalar branches
+ */
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedVariable<T>>::type
+condition(const UnifiedBooleanExpr<T>& predicate, const UnifiedVariable<T>& true_expr, const U& false_val)
+{
+    auto false_id = true_expr.arena()->add_expression(ExprData<T>::constant(static_cast<T>(false_val)));
+    
+    bool pred_value = predicate.value();
+    T initial_value = pred_value ? true_expr.value() : static_cast<T>(false_val);
+    
+    auto result_id = true_expr.arena()->add_expression(
+        ExprData<T>::conditional_op(initial_value, predicate.id(), true_expr.id(), false_id));
+    return UnifiedVariable<T>(true_expr.arena(), result_id);
+}
+
+template<typename T, typename U>
+typename std::enable_if<std::is_arithmetic<U>::value, UnifiedVariable<T>>::type
+condition(const UnifiedBooleanExpr<T>& predicate, const U& true_val, const UnifiedVariable<T>& false_expr)
+{
+    auto true_id = false_expr.arena()->add_expression(ExprData<T>::constant(static_cast<T>(true_val)));
+    
+    bool pred_value = predicate.value();
+    T initial_value = pred_value ? static_cast<T>(true_val) : false_expr.value();
+    
+    auto result_id = false_expr.arena()->add_expression(
+        ExprData<T>::conditional_op(initial_value, predicate.id(), true_id, false_expr.id()));
+    return UnifiedVariable<T>(false_expr.arena(), result_id);
+}
+
+/**
+ * @brief Minimum of two expressions
+ */
+template<typename T>
+UnifiedVariable<T> min(const UnifiedVariable<T>& x, const UnifiedVariable<T>& y)
+{
+    return condition(x < y, x, y);
+}
+
+/**
+ * @brief Maximum of two expressions
+ */
+template<typename T>
+UnifiedVariable<T> max(const UnifiedVariable<T>& x, const UnifiedVariable<T>& y)
+{
+    return condition(x > y, x, y);
+}
+
+/**
+ * @brief Sign function returning -1, 0, or 1
+ */
+template<typename T>
+UnifiedVariable<T> sgn(const UnifiedVariable<T>& x)
+{
+    auto zero_id = x.arena()->add_expression(ExprData<T>::constant(T{0}));
+    auto neg_one_id = x.arena()->add_expression(ExprData<T>::constant(T{-1}));
+    auto pos_one_id = x.arena()->add_expression(ExprData<T>::constant(T{1}));
+    
+    UnifiedVariable<T> zero_var(x.arena(), zero_id);
+    UnifiedVariable<T> neg_one_var(x.arena(), neg_one_id);
+    UnifiedVariable<T> pos_one_var(x.arena(), pos_one_id);
+    
+    return condition(x < T{0}, neg_one_var, condition(x > T{0}, pos_one_var, zero_var));
 }
 
 /**
@@ -1868,7 +2397,7 @@ void apply_to_tuple(const Tuple& t, F&& f)
 template<typename T>
 std::ostream& operator<<(std::ostream& out, const UnifiedVariable<T>& var)
 {
-    out << var.raw_value();
+    out << var.value();
     return out;
 }
 
@@ -1897,7 +2426,7 @@ using unifiedvarf = UnifiedVariable<float>;
  * CHILD REFERENCES:
  * ================
  * Original: ExprPtr<T> members (shared_ptr)
- * Unified:  ExprId<T> indices into arena
+ * Unified:  ExprId indices into arena
  *
  * PERFORMANCE BENEFITS:
  * ====================
