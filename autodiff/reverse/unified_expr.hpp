@@ -891,17 +891,30 @@ class ExpressionArena
   private:
     std::vector<ExprData<T>> expressions_;
     std::vector<T> gradient_workspace_;
+    // Version counter bumped whenever the arena mutates (new node added).
+    // Allows cached topological orders to be invalidated cheaply.
+    size_t version_ = 0;
+
+    // Cached topological order (post-order: children before parent)
+    mutable std::vector<ExprId> topo_cache_;
+    mutable ExprId topo_root_ = INVALID_EXPR_ID;
+    mutable size_t topo_built_version_ = static_cast<size_t>(-1);
+    // Auxiliary marker array used during topo building to avoid repeated allocations
+    mutable std::vector<char> visit_marker_;
 
   public:
     ExpressionArena()
     {
         this->reserve(1000); // Reserve some initial capacity
+        topo_built_version_ = static_cast<size_t>(-1);
     }
-    
+
     void reserve(size_t new_capacity)
     {
         expressions_.reserve(new_capacity);
         gradient_workspace_.reserve(new_capacity);
+        visit_marker_.reserve(new_capacity);
+        topo_cache_.reserve(new_capacity);
     }
 
     // Add expression to arena and return its ID
@@ -913,13 +926,21 @@ class ExpressionArena
         }
 
         auto id = expressions_.size();
-        
+
         // Add the expression
         expressions_.emplace_back(std::move(expr));
         gradient_workspace_.resize(expressions_.size(), T{0});
-        
+
         // Debug check: ensure all containers stay aligned
         assert(expressions_.size() == gradient_workspace_.size());
+
+        // Invalidate topo cache/versioning
+        ++version_;
+        topo_built_version_ = static_cast<size_t>(-1);
+        topo_root_ = INVALID_EXPR_ID;
+        if(visit_marker_.size() < expressions_.size())
+            visit_marker_.resize(expressions_.size());
+
         return id;
     }
 
@@ -979,6 +1000,107 @@ class ExpressionArena
         return expressions_.empty();
     }
 
+    // Return a cached topological order (post-order) of nodes reachable from
+    // `root_id`. The result is cached until the arena mutates (add_expression).
+    std::vector<ExprId> topological_order(ExprId root_id) const
+    {
+        std::vector<ExprId> result;
+        if(root_id == INVALID_EXPR_ID || expressions_.empty())
+            return result;
+
+        // If cache is valid for this root and version, return a copy of it
+        if(topo_built_version_ == version_ && topo_root_ == root_id) {
+            return topo_cache_;
+        }
+
+        const size_t n = expressions_.size();
+        // Ensure visit marker matches size
+        visit_marker_.assign(n, 0);
+
+        result.clear();
+        result.reserve(n);
+
+        // Stack of pairs: node id, whether children have been expanded
+        std::vector<std::pair<ExprId, bool>> stack;
+        stack.reserve(256);
+
+        auto push_if_valid = [&](ExprId cid) {
+            if(cid == INVALID_EXPR_ID) return;
+            if(static_cast<size_t>(cid) >= n) return;
+            if(visit_marker_[cid]) return;
+            visit_marker_[cid] = 1;
+            stack.emplace_back(cid, false);
+        };
+
+        // Start from root
+        visit_marker_[root_id] = 1;
+        stack.emplace_back(root_id, false);
+
+        while(!stack.empty()) {
+            auto [id, expanded] = stack.back();
+            stack.pop_back();
+            if(expanded) {
+                result.push_back(id);
+                continue;
+            }
+            // Mark to process after children
+            stack.emplace_back(id, true);
+            const ExprData<T>& node = expressions_[id];
+            // push children so they are processed first
+            for(unsigned ci = 0; ci < node.num_children && ci < node.children.size(); ++ci) {
+                push_if_valid(node.children[ci]);
+            }
+        }
+
+        // Cache the result
+        topo_cache_ = result;
+        topo_root_ = root_id;
+        topo_built_version_ = version_;
+
+        return topo_cache_;
+    }
+
+    // Return a const reference to the cached topological order for `root_id`.
+    // If the cache is not valid for the requested root/version it will be
+    // (re)computed and then returned by reference. This avoids copying the
+    // vector on hot paths like repeated propagate() calls.
+    const std::vector<ExprId>& cached_topological_order(ExprId root_id) const
+    {
+        if(topo_built_version_ != version_ || topo_root_ != root_id) {
+            // topological_order will populate topo_cache_ and set metadata
+            (void)topological_order(root_id);
+        }
+        return topo_cache_;
+    }
+        // The function caches the computed order in `topo_cache_`. The cache is
+        // considered valid while the arena's `version_` remains unchanged and the
+        // same `root_id` is requested. `add_expression()` bumps `version_` and
+        // invalidates the cache.
+        //
+        // Implementation notes:
+        // - Uses an iterative DFS with an explicit stack of (node, expanded)
+        //   pairs to produce post-order without recursion. This avoids deep
+        //   recursion on long chains and keeps memory usage bounded.
+        // - `visit_marker_` is a compact per-node char array reused across calls to
+        //   avoid allocating a fresh visited set each call; it is sized to match
+        //   `expressions_.size()` as needed.
+        // - We mark nodes as visited when they are pushed to the stack to avoid
+        //   pushing the same node multiple times (important for DAGs with shared
+        //   subexpressions).
+        // - The function returns an owned vector. Internally we store the result
+        //   in `topo_cache_` and return a copy (cheap enough for typical use). If
+        //   you need zero-copy access to the cache later we can expose a const
+        //   reference instead.
+        //
+        // Correctness caveats:
+        // - Conditional nodes whose reachable branch depends on boolean runtime
+        //   values are included based on the children recorded in `ExprData`. The
+        //   forward pass must have evaluated predicates so the graph reflects the
+        //   correct dependencies.
+        // - Any other arena mutation (removing nodes, modifying children) must
+        //   also bump `version_` or manually invalidate the cache to avoid stale
+        //   results.
+
     // !!! Please keep the function UNALTERED in the comments below !!!
 
     // Update a specific expression
@@ -1013,26 +1135,32 @@ class ExpressionArena
     void propagate(ExprId root_id, const T& wprime = T{1})
     {
         // Clear gradient workspace and reset processed flags
-        // Ensure gradient workspace is aligned before we write into it.
         assert(expressions_.size() == gradient_workspace_.size());
         std::fill(gradient_workspace_.begin(), gradient_workspace_.end(), T{0});
         for(auto& expr : expressions_) {
             expr.processed_in_backprop = false;
         }
 
-        // Start propagation from root
+        if(root_id == INVALID_EXPR_ID || expressions_.empty())
+            return;
+
+        // Start with seed
         gradient_workspace_[root_id] = wprime;
 
-        // Propagate in reverse topological order
-        for(size_t i = expressions_.size(); i > 0; --i) {
-            ExprId expr_id = i - 1;
-            auto& expr = expressions_[expr_id];
-            T current_grad = gradient_workspace_[expr_id];
+    // Get cached or freshly built topological order of nodes reachable from root
+    const std::vector<ExprId>& topo = this->cached_topological_order(root_id);
 
-            // Process each expression exactly once if it has accumulated gradient
+        // The topo vector is post-order (children before parent). For reverse
+        // accumulation we must process parents before children so a parent can
+        // distribute its accumulated gradient to its children. Iterate the
+        // topo vector in reverse to achieve parents-before-children order.
+        for(auto it = topo.rbegin(); it != topo.rend(); ++it) {
+            ExprId id = *it;
+            auto& expr = expressions_[id];
+            T current_grad = gradient_workspace_[id];
             if(current_grad != T{0} && !expr.processed_in_backprop) {
                 expr.processed_in_backprop = true;
-                propagate_expression(expr_id, current_grad);
+                propagate_expression(id, current_grad);
             }
         }
     }
