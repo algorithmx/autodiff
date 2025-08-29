@@ -144,195 +144,22 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include <unordered_map> // for per-root topo cache
+#include <mutex>         // for thread-safe cache access
+
+#include <unordered_set> // for parallel-safe per-build visited sets
+
 
 // autodiff includes
 #include <autodiff/common/meta.hpp>
 #include <autodiff/common/numbertraits.hpp>
+#include <autodiff/reverse/unified_common.hpp>
+#include <autodiff/reverse/unified_assistants.hpp>
+#include <autodiff/reverse/topo_order.hpp>
 
 namespace autodiff {
 namespace reverse {
 namespace unified {
-
-// Forward declarations
-template<typename T>
-struct ExprData;
-template<typename T>
-class ExpressionArena;
-template<typename T>
-class UnifiedVariable;
-template<typename T>
-class UnifiedBooleanExpr;
-// Use a 32-bit index type for expression IDs. This reduces per-node memory
-// footprint on 64-bit platforms when arena sizes fit within 32 bits.
-using ExprIndex_t = uint32_t;
-using ExprId = ExprIndex_t;
-
-static_assert(sizeof(ExprIndex_t) == 4, "ExprIndex_t must be 32-bit");
-
-// Invalid expression ID constant
-constexpr ExprId INVALID_EXPR_ID = std::numeric_limits<ExprIndex_t>::max();
-
-
-///////////////////////////
-// syntax assistants
-///////////////////////////
-
-
-/**
- * @brief Thread-local arena management for syntax sugar
- *
- * This allows creating variables without explicitly passing arena parameters:
- *
- * Usage:
- *   with_arena(arena) {
- *     auto x = make_var(2.0);  // Uses arena automatically
- *     auto y = make_var(3.0);
- *     auto z = x + y;          // All operations use same arena
- *   }
- *
- * Or using RAII:
- *   {
- *     ArenaScope scope;        // Creates and manages arena
- *     auto x = make_var(2.0);
- *     auto y = make_var(3.0);
- *   }  // Arena destroyed here
- */
-template<typename T>
-class ArenaManager
-{
-  private:
-    static thread_local std::shared_ptr<ExpressionArena<T>> current_arena_;
-
-  public:
-    static void set_current_arena(std::shared_ptr<ExpressionArena<T>> arena)
-    {
-        current_arena_ = arena;
-    }
-
-    static std::shared_ptr<ExpressionArena<T>> get_current_arena()
-    {
-        if(!current_arena_) {
-            throw std::runtime_error("No active arena. Use ArenaScope or with_arena() to set one.");
-        }
-        return current_arena_;
-    }
-
-    static bool has_current_arena()
-    {
-        return static_cast<bool>(current_arena_);
-    }
-
-    static void clear_current_arena()
-    {
-        current_arena_.reset();
-    }
-};
-
-// Static member definition
-template<typename T>
-thread_local std::shared_ptr<ExpressionArena<T>> ArenaManager<T>::current_arena_;
-
-/**
- * @brief RAII Arena Scope Manager
- *
- * Automatically creates and manages an arena for the current scope.
- * When the scope ends, the arena is automatically cleaned up.
- *
- * Usage:
- *   {
- *     ArenaScope<double> scope;
- *     auto x = make_var(2.0);
- *     auto y = make_var(3.0);
- *     auto z = sin(x) + cos(y);
- *   }  // Arena automatically destroyed
- */
-template<typename T>
-class ArenaScope
-{
-  private:
-    std::shared_ptr<ExpressionArena<T>> previous_arena_;
-    std::shared_ptr<ExpressionArena<T>> scope_arena_;
-
-  public:
-    explicit ArenaScope(size_t initial_capacity = 1000)
-    {
-        // Save previous arena
-        previous_arena_ = ArenaManager<T>::has_current_arena() ? ArenaManager<T>::get_current_arena() : nullptr;
-
-        // Create new arena for this scope
-        scope_arena_ = std::make_shared<ExpressionArena<T>>();
-        scope_arena_->reserve(initial_capacity);
-
-        // Set as current
-        ArenaManager<T>::set_current_arena(scope_arena_);
-    }
-
-    ~ArenaScope()
-    {
-        // Restore previous arena
-        if(previous_arena_) {
-            ArenaManager<T>::set_current_arena(previous_arena_);
-        } else {
-            ArenaManager<T>::clear_current_arena();
-        }
-    }
-
-    // Non-copyable, non-movable
-    ArenaScope(const ArenaScope&) = delete;
-    ArenaScope& operator=(const ArenaScope&) = delete;
-    ArenaScope(ArenaScope&&) = delete;
-    ArenaScope& operator=(ArenaScope&&) = delete;
-
-    // Access to the arena if needed
-    std::shared_ptr<ExpressionArena<T>> arena() const { return scope_arena_; }
-};
-
-/**
- * @brief Scoped arena context manager
- *
- * Temporarily sets an arena for a block of code.
- *
- * Usage:
- *   auto arena = std::make_shared<ExpressionArena<double>>();
- *   with_arena(arena) {
- *     auto x = make_var(2.0);
- *     auto y = make_var(3.0);
- *   }
- */
-template<typename T>
-class ScopedArenaContext
-{
-  private:
-    std::shared_ptr<ExpressionArena<T>> previous_arena_;
-
-  public:
-    explicit ScopedArenaContext(std::shared_ptr<ExpressionArena<T>> arena)
-    {
-        previous_arena_ = ArenaManager<T>::has_current_arena() ? ArenaManager<T>::get_current_arena() : nullptr;
-        ArenaManager<T>::set_current_arena(arena);
-    }
-
-    ~ScopedArenaContext()
-    {
-        if(previous_arena_) {
-            ArenaManager<T>::set_current_arena(previous_arena_);
-        } else {
-            ArenaManager<T>::clear_current_arena();
-        }
-    }
-
-    // Non-copyable, non-movable
-    ScopedArenaContext(const ScopedArenaContext&) = delete;
-    ScopedArenaContext& operator=(const ScopedArenaContext&) = delete;
-    ScopedArenaContext(ScopedArenaContext&&) = delete;
-    ScopedArenaContext& operator=(ScopedArenaContext&&) = delete;
-};
-
-// Macro for with_arena syntax
-#define with_arena(arena_ptr) \
-    if(auto _arena_ctx = ScopedArenaContext<double>(arena_ptr); true)
-
-
 
 
 // Forward declarations needed by VariablePool methods which forward to
@@ -518,7 +345,7 @@ enum class OpType : uint8_t
     Sqrt,
     Abs,
     Erf,
-    
+
     // Boolean unary operations
     LogicalNot,
 
@@ -532,7 +359,7 @@ enum class OpType : uint8_t
     Hypot2,
     PowConstantLeft,
     PowConstantRight,
-    
+
     // Boolean binary operations (comparison and logical)
     Equal,
     NotEqual,
@@ -878,13 +705,15 @@ private:
  * - update_all(): Forward pass to compute all values
  * - propagate(): Backward pass for gradient computation
  *
- * TRAVERSAL PATTERNS:
- * ==================
+ */
+
+/* ==================
  * The arena enables efficient traversal patterns:
  * - Forward pass: Sequential iteration through expressions
  * - Backward pass: Reverse iteration with dependency tracking
  * - Both patterns have excellent cache locality
  */
+
 template<typename T>
 class ExpressionArena
 {
@@ -895,18 +724,42 @@ class ExpressionArena
     // Allows cached topological orders to be invalidated cheaply.
     size_t version_ = 0;
 
-    // Cached topological order (post-order: children before parent)
+    // Encapsulated topological ordering engine. This replaces scattered fields
+    // (visit markers, caches, mutex) with a single component responsible for
+    // computing and caching orders using either the legacy or parallel-safe path.
+    std::unique_ptr<TopoOrderingEngine<T>> topo_engine_;
+
+    // Legacy single-root cache kept for API compatibility with tests; this
+    // is still accessible via topo_engine_.cached_topological_order().
     mutable std::vector<ExprId> topo_cache_;
     mutable ExprId topo_root_ = INVALID_EXPR_ID;
     mutable size_t topo_built_version_ = static_cast<size_t>(-1);
-    // Auxiliary marker array used during topo building to avoid repeated allocations
+
+    // Auxiliary marker kept for backward compatibility (no longer used in builds)
     mutable std::vector<char> visit_marker_;
 
   public:
     ExpressionArena()
     {
-        this->reserve(1000); // Reserve some initial capacity
+        constexpr size_t initial_capacity = 1000;
+        // Manually reserve core containers before creating the topo engine
+        expressions_.reserve(initial_capacity);
+        gradient_workspace_.reserve(initial_capacity);
+        visit_marker_.reserve(initial_capacity);
+        topo_cache_.reserve(initial_capacity);
         topo_built_version_ = static_cast<size_t>(-1);
+
+        // Initialize topo engine once the arena object is constructed
+        topo_engine_ = std::make_unique<TopoOrderingEngine<T>>(
+            // size_fn
+            [this]() -> size_t { return this->expressions_.size(); },
+            // at_fn
+            [this](ExprId id) -> const ExprData<T>& { return this->expressions_[id]; },
+            // version_fn (legacy append version)
+            [this]() -> size_t { return this->version_; },
+            64 // default per-root cache capacity; can be made configurable later
+        );
+        topo_engine_->on_reserve(initial_capacity);
     }
 
     void reserve(size_t new_capacity)
@@ -915,6 +768,7 @@ class ExpressionArena
         gradient_workspace_.reserve(new_capacity);
         visit_marker_.reserve(new_capacity);
         topo_cache_.reserve(new_capacity);
+        if(topo_engine_) topo_engine_->on_reserve(new_capacity);
     }
 
     // Add expression to arena and return its ID
@@ -934,10 +788,15 @@ class ExpressionArena
         // Debug check: ensure all containers stay aligned
         assert(expressions_.size() == gradient_workspace_.size());
 
-        // Invalidate topo cache/versioning
+        // Arena mutated (append-only). Bump version_ for legacy cache semantics.
         ++version_;
         topo_built_version_ = static_cast<size_t>(-1);
         topo_root_ = INVALID_EXPR_ID;
+
+        // Notify topo engine; appends do not invalidate per-root caches.
+        topo_engine_->on_append(expressions_.size(), version_);
+
+        // Keep visit_marker_ sized for compatibility (not used by topo_engine_).
         if(visit_marker_.size() < expressions_.size())
             visit_marker_.resize(expressions_.size());
 
@@ -950,7 +809,7 @@ class ExpressionArena
         // Evaluate the comparison to get the boolean result
         const T& left_val = expressions_[left_id].value;
         const T& right_val = expressions_[right_id].value;
-        
+
         bool result = false;
         switch(comparison_op) {
         case OpType::Equal:
@@ -974,7 +833,7 @@ class ExpressionArena
         default:
             throw std::runtime_error("Invalid comparison operation");
         }
-        
+
         return add_expression(ExprData<T>::boolean_binary_op(comparison_op, result, left_id, right_id));
     }
 
@@ -994,83 +853,31 @@ class ExpressionArena
     {
         return expressions_.size();
     }
-    
+
     bool empty() const
     {
         return expressions_.empty();
     }
 
-    // Return a cached topological order (post-order) of nodes reachable from
-    // `root_id`. The result is cached until the arena mutates (add_expression).
+    // Return a post-order topological order for nodes reachable from `root_id`.
+    // Delegates to the TopoOrderingEngine, which uses generation-based visitation.
     std::vector<ExprId> topological_order(ExprId root_id) const
     {
-        std::vector<ExprId> result;
-        if(root_id == INVALID_EXPR_ID || expressions_.empty())
-            return result;
-
-        // If cache is valid for this root and version, return a copy of it
-        if(topo_built_version_ == version_ && topo_root_ == root_id) {
-            return topo_cache_;
-        }
-
-        const size_t n = expressions_.size();
-        // Ensure visit marker matches size
-        visit_marker_.assign(n, 0);
-
-        result.clear();
-        result.reserve(n);
-
-        // Stack of pairs: node id, whether children have been expanded
-        std::vector<std::pair<ExprId, bool>> stack;
-        stack.reserve(256);
-
-        auto push_if_valid = [&](ExprId cid) {
-            if(cid == INVALID_EXPR_ID) return;
-            if(static_cast<size_t>(cid) >= n) return;
-            if(visit_marker_[cid]) return;
-            visit_marker_[cid] = 1;
-            stack.emplace_back(cid, false);
-        };
-
-        // Start from root
-        visit_marker_[root_id] = 1;
-        stack.emplace_back(root_id, false);
-
-        while(!stack.empty()) {
-            auto [id, expanded] = stack.back();
-            stack.pop_back();
-            if(expanded) {
-                result.push_back(id);
-                continue;
-            }
-            // Mark to process after children
-            stack.emplace_back(id, true);
-            const ExprData<T>& node = expressions_[id];
-            // push children so they are processed first
-            for(unsigned ci = 0; ci < node.num_children && ci < node.children.size(); ++ci) {
-                push_if_valid(node.children[ci]);
-            }
-        }
-
-        // Cache the result
-        topo_cache_ = result;
-        topo_root_ = root_id;
-        topo_built_version_ = version_;
-
-        return topo_cache_;
+        return topo_engine_->topological_order(root_id);
     }
 
-    // Return a const reference to the cached topological order for `root_id`.
-    // If the cache is not valid for the requested root/version it will be
-    // (re)computed and then returned by reference. This avoids copying the
-    // vector on hot paths like repeated propagate() calls.
+    // Parallel-safe cached topological order delegated to TopoOrderingEngine.
+    const std::vector<ExprId>& cached_topological_order_parallel_safe(ExprId root_id) const
+    {
+        return topo_engine_->cached_topological_order_parallel_safe(root_id);
+    }
+
+    // Return a const reference to the cached post-order for `root_id` using the
+    // legacy single-root cache policy (append invalidates). For multi-root/parallel
+    // workloads, prefer cached_topological_order_parallel_safe().
     const std::vector<ExprId>& cached_topological_order(ExprId root_id) const
     {
-        if(topo_built_version_ != version_ || topo_root_ != root_id) {
-            // topological_order will populate topo_cache_ and set metadata
-            (void)topological_order(root_id);
-        }
-        return topo_cache_;
+        return topo_engine_->cached_topological_order(root_id);
     }
         // The function caches the computed order in `topo_cache_`. The cache is
         // considered valid while the arena's `version_` remains unchanged and the
@@ -1148,6 +955,8 @@ class ExpressionArena
         gradient_workspace_[root_id] = wprime;
 
     // Get cached or freshly built topological order of nodes reachable from root
+    // NOTE: For multi-root and/or parallel workloads, consider switching to
+    // cached_topological_order_parallel_safe(root_id) instead of the legacy cache.
     const std::vector<ExprId>& topo = this->cached_topological_order(root_id);
 
         // The topo vector is post-order (children before parent). For reverse
@@ -2378,11 +2187,11 @@ template<typename T>
 UnifiedVariable<T> condition(const UnifiedBooleanExpr<T>& predicate, const UnifiedVariable<T>& true_expr, const UnifiedVariable<T>& false_expr)
 {
     true_expr.ensure_same_arena(false_expr);
-    
+
     // Update predicate to get current value for initial evaluation
     bool pred_value = predicate.value();
     T initial_value = pred_value ? true_expr.value() : false_expr.value();
-    
+
     auto result_id = true_expr.arena()->add_expression(
         ExprData<T>::conditional_op(initial_value, predicate.id(), true_expr.id(), false_expr.id()));
     return UnifiedVariable<T>(true_expr.arena(), result_id);
@@ -2398,10 +2207,10 @@ condition(const UnifiedBooleanExpr<T>& predicate, const U& true_val, const V& fa
     auto arena = predicate.arena();
     auto true_id = arena->add_expression(ExprData<T>::constant(static_cast<T>(true_val)));
     auto false_id = arena->add_expression(ExprData<T>::constant(static_cast<T>(false_val)));
-    
+
     bool pred_value = predicate.value();
     T initial_value = pred_value ? static_cast<T>(true_val) : static_cast<T>(false_val);
-    
+
     auto result_id = arena->add_expression(
         ExprData<T>::conditional_op(initial_value, predicate.id(), true_id, false_id));
     return UnifiedVariable<T>(arena, result_id);
@@ -2415,10 +2224,10 @@ typename std::enable_if<std::is_arithmetic<U>::value, UnifiedVariable<T>>::type
 condition(const UnifiedBooleanExpr<T>& predicate, const UnifiedVariable<T>& true_expr, const U& false_val)
 {
     auto false_id = true_expr.arena()->add_expression(ExprData<T>::constant(static_cast<T>(false_val)));
-    
+
     bool pred_value = predicate.value();
     T initial_value = pred_value ? true_expr.value() : static_cast<T>(false_val);
-    
+
     auto result_id = true_expr.arena()->add_expression(
         ExprData<T>::conditional_op(initial_value, predicate.id(), true_expr.id(), false_id));
     return UnifiedVariable<T>(true_expr.arena(), result_id);
@@ -2429,10 +2238,10 @@ typename std::enable_if<std::is_arithmetic<U>::value, UnifiedVariable<T>>::type
 condition(const UnifiedBooleanExpr<T>& predicate, const U& true_val, const UnifiedVariable<T>& false_expr)
 {
     auto true_id = false_expr.arena()->add_expression(ExprData<T>::constant(static_cast<T>(true_val)));
-    
+
     bool pred_value = predicate.value();
     T initial_value = pred_value ? static_cast<T>(true_val) : false_expr.value();
-    
+
     auto result_id = false_expr.arena()->add_expression(
         ExprData<T>::conditional_op(initial_value, predicate.id(), true_id, false_expr.id()));
     return UnifiedVariable<T>(false_expr.arena(), result_id);
@@ -2465,11 +2274,11 @@ UnifiedVariable<T> sgn(const UnifiedVariable<T>& x)
     auto zero_id = x.arena()->add_expression(ExprData<T>::constant(T{0}));
     auto neg_one_id = x.arena()->add_expression(ExprData<T>::constant(T{-1}));
     auto pos_one_id = x.arena()->add_expression(ExprData<T>::constant(T{1}));
-    
+
     UnifiedVariable<T> zero_var(x.arena(), zero_id);
     UnifiedVariable<T> neg_one_var(x.arena(), neg_one_id);
     UnifiedVariable<T> pos_one_var(x.arena(), pos_one_id);
-    
+
     return condition(x < T{0}, neg_one_var, condition(x > T{0}, pos_one_var, zero_var));
 }
 
