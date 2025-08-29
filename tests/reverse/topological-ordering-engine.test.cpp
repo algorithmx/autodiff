@@ -145,7 +145,7 @@ TEST_CASE("TopoOrderingEngine: per-root LRU eviction (capacity=1)", "[reverse][u
 
     // Not strictly guaranteed by standard containers, but in our implementation it should
     // be a different vector instance because the old entry was evicted.
-    CHECK(&a1 != &a2);
+    CHECK(&a1 != &a2); // TODO FAILED
     CHECK(a2.back() == r1.id());
 }
 
